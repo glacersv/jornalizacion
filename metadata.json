@@ -1,0 +1,6 @@
+{
+  "name": "Gestor de Jornalización Académica",
+  "description": "Herramienta de planificación y jornalización didáctica anual para Educación Media Técnica Vocacional basada en competencias y calendario lectivo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
