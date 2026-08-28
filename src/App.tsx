@@ -14,7 +14,7 @@ import { PrintDocumentArea } from './components/PrintDocumentArea';
 import { ModuleDescriptorViewer } from './components/ModuleDescriptorViewer';
 import { AcademicCalendarTimeline } from './components/AcademicCalendarTimeline';
 import { InstitutionalCalendarPage } from './components/InstitutionalCalendarPage';
-import { recalculateModuleDatesFromCalendar } from './utils/fileImportParsers';
+import { recalculateModuleDatesFromCalendar, createEmpty12Months } from './utils/fileImportParsers';
 import { MarkdownOutputModal } from './components/MarkdownOutputModal';
 import { ConfigModal } from './components/ConfigModal';
 import { ModuleEditModal } from './components/ModuleEditModal';
@@ -47,6 +47,8 @@ import {
   UploadCloud,
   UserCheck,
   FileSpreadsheet,
+  Trash2,
+  RotateCcw,
 } from 'lucide-react';
 
 export default function App() {
@@ -303,21 +305,211 @@ export default function App() {
     }));
   };
 
-  // Handler: Import JSON
+  // Handler: Clear all data (blank slate)
+  const handleClearData = (allGrades = false) => {
+    if (allGrades) {
+      setGradeDatasets((prev) => {
+        const next = { ...prev };
+        (['10', '11', '12'] as const).forEach((g) => {
+          next[g] = {
+            ...next[g],
+            modules: [],
+          };
+        });
+        return next;
+      });
+    } else {
+      setGradeDatasets((prev) => ({
+        ...prev,
+        [currentGrade]: {
+          ...prev[currentGrade],
+          modules: [],
+        },
+      }));
+    }
+  };
+
+  // Handler: Clear dates only (leaves modules, codes, names, and hours intact)
+  const handleClearDates = (allGrades = false) => {
+    if (allGrades) {
+      setGradeDatasets((prev) => {
+        const next = { ...prev };
+        (['10', '11', '12'] as const).forEach((g) => {
+          next[g] = {
+            ...next[g],
+            modules: next[g].modules.map((m) => ({
+              ...m,
+              diaInicio: 0,
+              mesInicio: '',
+              diaFin: 0,
+              mesFin: '',
+              fechaInicio: '',
+              fechaFin: '',
+              bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
+            })),
+          };
+        });
+        return next;
+      });
+    } else {
+      setGradeDatasets((prev) => ({
+        ...prev,
+        [currentGrade]: {
+          ...prev[currentGrade],
+          modules: prev[currentGrade].modules.map((m) => ({
+            ...m,
+            diaInicio: 0,
+            mesInicio: '',
+            diaFin: 0,
+            mesFin: '',
+            fechaInicio: '',
+            fechaFin: '',
+            bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
+          })),
+        },
+      }));
+    }
+  };
+
+  // Handler: Recalculate module dates automatically from calendar
+  const handleRecalculateDates = () => {
+    setGradeDatasets((prev) => {
+      const currentEntry = prev[currentGrade];
+      const recalculated = recalculateModuleDatesFromCalendar(
+        currentEntry.modules,
+        currentEntry.months,
+        academicPeriods2026
+      );
+      return {
+        ...prev,
+        [currentGrade]: {
+          ...currentEntry,
+          modules: recalculated,
+        },
+      };
+    });
+  };
+
+  // Handler: Clear annual calendar to zero weeks and days
+  const handleClearCalendar = () => {
+    const emptyMonths = createEmpty12Months();
+    setGradeDatasets((prev) => {
+      const next = { ...prev };
+      (['10', '11', '12'] as const).forEach((g) => {
+        next[g] = {
+          ...next[g],
+          months: JSON.parse(JSON.stringify(emptyMonths)),
+        };
+      });
+      return next;
+    });
+  };
+
+  // Handler: Restore all 27 Official MINED Modules across 10th, 11th, and 12th grades
+  const handleRestoreOfficialModules = () => {
+    setGradeDatasets((prev) => {
+      const next = { ...prev };
+      (['10', '11', '12'] as const).forEach((g) => {
+        const defaultMods =
+          g === '10'
+            ? modulesData1stYear
+            : g === '11'
+            ? modulesData2ndYear
+            : modulesData3rdYear;
+        const defaultGradeName =
+          g === '10'
+            ? '1° Año Tec. Voc. Diseño Gráfico'
+            : g === '11'
+            ? '2° Año Tec. Voc. Diseño Gráfico'
+            : '3° Año Tec. Voc. Diseño Gráfico';
+        const defaultHours = g === '12' ? 30 : 18;
+
+        next[g] = {
+          headerData: {
+            ...next[g].headerData,
+            institucion: 'Colegio Salesiano San José - Santa Ana',
+            gradoSeccion: defaultGradeName,
+            horasSemanalesModulo: defaultHours,
+            anoNivel: g,
+          },
+          months: next[g].months,
+          modules: recalculateModuleDatesFromCalendar(
+            JSON.parse(JSON.stringify(defaultMods)),
+            next[g].months,
+            academicPeriods2026
+          ),
+        };
+      });
+      return next;
+    });
+  };
+
+  // Handler: Import Data from Parsers or Modals
   const handleImportData = (data: {
     headerData?: InstitutionalHeader;
     months?: MonthStats[];
     modules?: ModuleDescriptor[];
+    targetGrade?: '10' | '11' | '12';
   }) => {
-    setGradeDatasets((prev) => ({
-      ...prev,
-      [currentGrade]: {
-        headerData: data.headerData || prev[currentGrade].headerData,
-        months: data.months || prev[currentGrade].months,
-        modules: data.modules || prev[currentGrade].modules,
-      },
-    }));
+    const gradeToUse = data.targetGrade || currentGrade;
+    if (data.targetGrade && data.targetGrade !== currentGrade) {
+      setCurrentGrade(data.targetGrade);
+    }
+
+    setGradeDatasets((prev) => {
+      const next = { ...prev };
+      const currentEntry = prev[gradeToUse];
+      let cleanHeader = data.headerData ? { ...currentEntry.headerData, ...data.headerData } : currentEntry.headerData;
+
+      // Sanitize institution and grade in header to prevent giant document text injection
+      if (cleanHeader.institucion && (cleanHeader.institucion.length > 60 || /calendario|asamblea|distribuci|periodo|evaluaci/i.test(cleanHeader.institucion))) {
+        cleanHeader.institucion = 'Colegio Salesiano San José - Santa Ana';
+      }
+      if (cleanHeader.gradoSeccion && (cleanHeader.gradoSeccion.length > 50 || /calendario|asamblea|distribuci|periodo|evaluaci|padres|salones/i.test(cleanHeader.gradoSeccion))) {
+        cleanHeader.gradoSeccion = gradeToUse === '10' ? '1° Año Tec. Voc. Diseño Gráfico' : gradeToUse === '12' ? '3° Año Tec. Voc. Diseño Gráfico' : '2° Año Tec. Voc. Diseño Gráfico';
+      }
+
+      const newMonths = data.months && data.months.length > 0 ? data.months : currentEntry.months;
+      
+      let finalModules = (data.modules && data.modules.length > 0) ? data.modules : currentEntry.modules;
+      if (!finalModules || finalModules.length === 0) {
+        const fallbackDefaultMods =
+          gradeToUse === '10'
+            ? modulesData1stYear
+            : gradeToUse === '12'
+            ? modulesData3rdYear
+            : modulesData2ndYear;
+        finalModules = JSON.parse(JSON.stringify(fallbackDefaultMods));
+      }
+
+      finalModules = recalculateModuleDatesFromCalendar(finalModules, newMonths, academicPeriods2026);
+
+      // If new calendar months are provided, update across all grades keeping all 27 modules synchronized
+      if (data.months && data.months.length > 0) {
+        (['10', '11', '12'] as const).forEach((g) => {
+          let gModules = (g === gradeToUse) ? finalModules : next[g].modules;
+          if (!gModules || gModules.length === 0) {
+            const fallbackG = g === '10' ? modulesData1stYear : g === '12' ? modulesData3rdYear : modulesData2ndYear;
+            gModules = JSON.parse(JSON.stringify(fallbackG));
+          }
+          next[g] = {
+            ...next[g],
+            months: JSON.parse(JSON.stringify(newMonths)),
+            modules: recalculateModuleDatesFromCalendar(gModules, newMonths, academicPeriods2026),
+          };
+        });
+      }
+
+      next[gradeToUse] = {
+        headerData: cleanHeader,
+        months: newMonths,
+        modules: finalModules,
+      };
+
+      return next;
+    });
   };
+
 
   // Copy Markdown
   const handleCopyMarkdown = () => {
@@ -424,8 +616,15 @@ export default function App() {
             headerData={headerData}
             months={months}
             modules={modules}
+            currentGrade={currentGrade}
+            onSelectGrade={handleSelectGrade}
             onImportData={handleImportData}
             onResetToDefaults={handleResetToDefaults}
+            onRestoreOfficialModules={handleRestoreOfficialModules}
+            onClearData={handleClearData}
+            onClearDates={handleClearDates}
+            onClearCalendar={handleClearCalendar}
+            onRecalculateDates={handleRecalculateDates}
             onGoToJornalizacion={() => setActiveView('jornalizacion')}
             onGoToCalendario={() => setActiveView('calendario')}
           />
@@ -477,6 +676,15 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
+                <button
+                  id="btn-limpiar-fechas-banner"
+                  onClick={() => handleClearDates(false)}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-red-950/60 hover:border-red-500/50 text-slate-200 hover:text-red-300 text-xs font-bold flex items-center gap-1.5 transition-all border border-slate-700 shadow-xs"
+                  title="Borrar fechas probables de inicio y fin de la calendarización para iniciar el año escolar (los módulos y horas quedan intactos)"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                  <span>Borrar Fechas Probables</span>
+                </button>
                 <button
                   onClick={handleRecalculateJornalizacion}
                   className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs"
@@ -572,6 +780,8 @@ export default function App() {
               isEditMode={isEditMode}
               onUpdateModules={handleUpdateModules}
               onSelectModule={handleOpenModuleDetail}
+              onClearDates={() => handleClearDates(false)}
+              onRecalculateDates={handleRecalculateDates}
             />
 
             {/* Table 4: Nómina de Módulos & Nota Evaluativa */}

@@ -238,15 +238,15 @@ export function exportToWordDocument(
         <tr>
           <td class="bold" style="background-color: #f8fafc;">${m.codigo}</td>
           <td class="text-left">${m.nombre}</td>
-          <td class="bold">${m.duracionHoras}h</td>
-          <td>${m.semanas}</td>
-          <td>${m.desarrolloTecnico}</td>
-          <td>${m.desarrolloEmprendedor}</td>
-          <td>${m.desarrolloHumanoSocial}</td>
-          <td>${m.desarrolloAcademicoAplicado}</td>
-          <td class="bold" style="background-color: #f1f5f9;">${m.totalIndicadores}</td>
-          <td>${m.horasPorUnidad.u1}h</td>
-          <td class="bold">${m.totalHoras}h</td>
+          <td class="bold">${m.duracionHoras ?? m.totalHoras ?? 0}h</td>
+          <td>${m.semanas ?? 1}</td>
+          <td>${m.desarrolloTecnico ?? 0}</td>
+          <td>${m.desarrolloEmprendedor ?? 0}</td>
+          <td>${m.desarrolloHumanoSocial ?? 0}</td>
+          <td>${m.desarrolloAcademicoAplicado ?? 0}</td>
+          <td class="bold" style="background-color: #f1f5f9;">${m.totalIndicadores ?? 0}</td>
+          <td>${m.horasPorUnidad?.u1 ?? m.duracionHoras ?? m.totalHoras ?? 0}h</td>
+          <td class="bold">${m.totalHoras ?? 0}h</td>
         </tr>
       `
         )

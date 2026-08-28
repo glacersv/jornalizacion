@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { MonthStats } from '../types';
 import { SuspensionesManager } from './SuspensionesManager';
-import { CalendarDays, Edit2, RotateCcw, Info, Check, Sparkles } from 'lucide-react';
+import { CalendarDays, Edit2, RotateCcw, Info, Check, Sparkles, Trash2 } from 'lucide-react';
 
 interface Table1Props {
   months: MonthStats[];
@@ -92,6 +92,19 @@ export const Table1SemanasLaborales: React.FC<Table1Props> = ({
     setSelectedPreset('efectivo');
   };
 
+  // Preset 3: Vaciar semanas y días a cero (Limpio para ingresar desde cero)
+  const applyClearCalendar = () => {
+    if (!onUpdateMonths) return;
+    const cleared = months.map((m) => ({
+      ...m,
+      semanas: 0,
+      dias: 0,
+      feriadosDesc: '',
+    }));
+    onUpdateMonths(cleared);
+    setSelectedPreset(null);
+  };
+
   return (
     <div id="section-tabla-1" className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mb-8">
       {/* Informative Explanation Banner */}
@@ -111,7 +124,7 @@ export const Table1SemanasLaborales: React.FC<Table1Props> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               onClick={applyPreset200Dias}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border shadow-2xs ${
@@ -133,7 +146,20 @@ export const Table1SemanasLaborales: React.FC<Table1Props> = ({
               }`}
             >
               <Check className="w-3.5 h-3.5" />
-              <span>Días Netos Salesiano (182)</span>
+              <span>Días Salesiano (182)</span>
+            </button>
+
+            <button
+              onClick={applyClearCalendar}
+              title="Poner en 0 semanas y 0 días todos los meses para rellenar de nuevo"
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 border shadow-2xs ${
+                totalDias === 0 && totalSemanas === 0
+                  ? 'bg-red-600 text-white border-red-600 ring-2 ring-red-500/20'
+                  : 'bg-white text-red-600 border-red-200 hover:bg-red-50'
+              }`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Vaciar a Cero</span>
             </button>
           </div>
         </div>

@@ -1,22 +1,25 @@
 import { ModuleDescriptor, InstitutionalHeader, GuionDeClase, GuionEvaluacionRow } from '../types';
 import { getModuleStagesAccionCompleta } from './didacticPlanHelper';
 
-// Calculate session dates across module date range
-export function getSessionDateRange(
+// Calculate session dates and week distribution across module cronograma
+export function getSessionWeekAndDates(
   module: ModuleDescriptor,
   anoLectivo: string,
   sessionIndex: number,
   totalSessions: number
-): string {
+): { semanaTexto: string; fechaTexto: string; semanaNumero: number } {
   const startStr = `${module.diaInicio} de ${module.mesInicio}`;
   const endStr = `${module.diaFin} de ${module.mesFin}`;
-  if (totalSessions <= 1) {
-    return `Del ${startStr} al ${endStr} de ${anoLectivo}`;
-  }
-  return `Sesión ${sessionIndex + 1}/${totalSessions} · Período del ${startStr} al ${endStr} de ${anoLectivo}`;
+  const semanaNumero = sessionIndex + 1;
+  const totalSemanasModulo = module.semanas || totalSessions;
+
+  const semanaTexto = `Semana ${semanaNumero} de ${totalSemanasModulo} (Cronograma del Módulo)`;
+  const fechaTexto = `Del ${startStr} al ${endStr} de ${anoLectivo}`;
+
+  return { semanaTexto, fechaTexto, semanaNumero };
 }
 
-// Generate the complete set of Guiones de Clase for a given module
+// Generate the complete set of Guiones de Clase for a given module based on its cronograma weeks
 export function generateModuleGuiones(
   module: ModuleDescriptor,
   headerData: InstitutionalHeader,
@@ -28,22 +31,19 @@ export function generateModuleGuiones(
   const modHoras = module.duracionHoras || 72;
   const docente = headerData.docente || 'Profesor Especialista';
   const gradoSeccion = headerData.gradoSeccion || '2° Año Tec. Voc. Diseño Gráfico';
-
-  // Determine trimestres / period
-  let trimestre = '1° Trimestre';
-  const mesIni = module.mesInicio?.toLowerCase() || '';
-  if (mesIni.includes('abr') || mesIni.includes('may') || mesIni.includes('jun')) {
-    trimestre = '2° Trimestre';
-  } else if (mesIni.includes('jul') || mesIni.includes('ago') || mesIni.includes('sep') || mesIni.includes('oct') || mesIni.includes('nov')) {
-    trimestre = '3° Trimestre';
-  }
+  const totalSemanas = module.semanas || stages.length;
 
   return stages.map((st, idx) => {
     const sesionNumero = idx + 1;
     const totalSesiones = stages.length;
     const stageId = st.id;
     const horasSesion = st.horasEstimadas;
-    const dateText = getSessionDateRange(module, anoLectivo, idx, totalSesiones);
+    const { semanaTexto, fechaTexto, semanaNumero } = getSessionWeekAndDates(
+      module,
+      anoLectivo,
+      idx,
+      totalSesiones
+    );
 
     // Contextual unit title
     let unidadTitle = `Unidad ${Math.min(module.unidades || 3, Math.ceil((idx + 1) / 2))}: `;
@@ -156,8 +156,8 @@ export function generateModuleGuiones(
     const evalRow: GuionEvaluacionRow = {
       no: 1,
       actividad: `${st.etapa}: ${st.evidenciasSugeridas}`,
-      ponderacion: st.ponderacionGlobalModuloTexto,
-      fechaRealizacion: dateText,
+      ponderacion: `Fase ${st.faseId}: ${st.ponderacionGlobalModuloTexto}`,
+      fechaRealizacion: fechaTexto,
     };
 
     return {
@@ -168,8 +168,9 @@ export function generateModuleGuiones(
       moduloNombre: modNombre,
       docente,
       gradoSeccion,
-      trimestre,
-      fecha: dateText,
+      semanaModulo: semanaTexto,
+      semanaNumero,
+      fecha: fechaTexto,
       unidad: unidadTitle,
       contenido,
       tiempo: `${horasSesion} Horas pedagógicas (${st.tiempo})`,
@@ -208,8 +209,8 @@ export function exportGuionesToWord(
   const modCodigo = module?.codigo || guiones[0]?.moduloCodigo || 'BTVDG';
   const fileName =
     mode === 'single' && guiones.length === 1
-      ? `Guion_Clase_${modCodigo}_Sesion_${guiones[0].sesionNumero}_${guiones[0].etapaNumero}.doc`
-      : `Guiones_Clase_Completos_${modCodigo}_2026.doc`;
+      ? `Guion_Clase_${modCodigo}_Semana_${guiones[0].semanaNumero || guiones[0].sesionNumero}_${guiones[0].etapaNumero}.doc`
+      : `Guiones_Clase_Cronograma_${modCodigo}_2026.doc`;
 
   let bodyHtml = '';
 
@@ -249,10 +250,10 @@ export function exportGuionesToWord(
         <tr>
           <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f8fafc;">Grado y sección:</td>
           <td style="padding: 5px; border: 1px solid #cbd5e1; width: 25%;">${g.gradoSeccion}</td>
-          <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f8fafc; width: 12%;">Trimestre:</td>
-          <td style="padding: 5px; border: 1px solid #cbd5e1; width: 18%;">${g.trimestre}</td>
-          <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f8fafc; width: 10%;">Fecha:</td>
-          <td style="padding: 5px; border: 1px solid #cbd5e1; width: 20%;">${g.fecha}</td>
+          <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f8fafc; width: 14%;">Semana Cronograma:</td>
+          <td style="padding: 5px; border: 1px solid #cbd5e1; width: 20%; font-weight: 600; color: #1e40af;">${g.semanaModulo}</td>
+          <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f8fafc; width: 8%;">Fecha:</td>
+          <td style="padding: 5px; border: 1px solid #cbd5e1; width: 18%;">${g.fecha}</td>
         </tr>
         <tr>
           <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f8fafc;">Unidad :</td>

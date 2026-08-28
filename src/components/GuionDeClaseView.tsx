@@ -407,18 +407,18 @@ export const GuionDeClaseView: React.FC<GuionDeClaseViewProps> = ({
             </div>
 
             <div className="p-2 sm:p-3 font-bold text-slate-700 bg-slate-100 sm:col-span-1 border-r border-slate-200 flex items-center">
-              Trimestre:
+              Semana Cronograma:
             </div>
-            <div className="p-2 sm:p-3 sm:col-span-1 border-r border-slate-200 flex items-center font-medium">
+            <div className="p-2 sm:p-3 sm:col-span-1 border-r border-slate-200 flex items-center font-bold text-blue-900">
               {isEditing ? (
                 <input
                   type="text"
-                  value={activeGuion.trimestre}
-                  onChange={(e) => handleUpdateActiveGuion({ trimestre: e.target.value })}
+                  value={activeGuion.semanaModulo}
+                  onChange={(e) => handleUpdateActiveGuion({ semanaModulo: e.target.value })}
                   className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs"
                 />
               ) : (
-                activeGuion.trimestre
+                activeGuion.semanaModulo
               )}
             </div>
 

@@ -51,7 +51,7 @@ export const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
       // Auto update total hours
       if (field === 'duracionHoras') {
         updated.totalHoras = Number(value) || 0;
-        updated.horasPorUnidad = { ...updated.horasPorUnidad, u1: Number(value) || 0 };
+        updated.horasPorUnidad = { ...(updated.horasPorUnidad || { u1: Number(value) || 0 }), u1: Number(value) || 0 };
       }
 
       return updated;

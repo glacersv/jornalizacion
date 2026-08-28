@@ -134,7 +134,9 @@ export interface GuionDeClase {
   moduloNombre: string;
   docente: string;
   gradoSeccion: string;
-  trimestre: string;
+  trimestre?: string;
+  semanaModulo: string; // e.g. "Semana 1 de 4 (Cronograma)"
+  semanaNumero?: number;
   fecha: string;
   unidad: string;
   contenido: string;

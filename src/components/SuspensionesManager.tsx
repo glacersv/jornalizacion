@@ -333,76 +333,30 @@ export const SuspensionesManager: React.FC<SuspensionesManagerProps> = ({
     <div id="detalle-descansos-pausas-section" className="bg-slate-50/70 border-t border-slate-200 p-4 text-xs text-slate-700">
       
       {/* Header Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4 pb-3 border-b border-slate-200">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 pb-3 border-b border-slate-200">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="p-1 rounded-lg bg-blue-100 text-blue-800">
+            <span className="p-1.5 rounded-xl bg-blue-100 text-blue-800">
               <CalendarDays className="w-4 h-4" />
             </span>
             <h3 className="font-extrabold text-slate-900 text-sm tracking-tight">
-              Detalle de Descansos, Pausas Pedagógicas y Suspensiones Institucionales
+              Cronograma de Actividades, Descansos y Pausas Pedagógicas
             </h3>
-            <span className="px-2 py-0.5 bg-blue-100 text-blue-900 rounded-full font-bold text-[10px] border border-blue-200">
+            <span className="px-2.5 py-0.5 bg-blue-100 text-blue-900 rounded-full font-bold text-[10px] border border-blue-200">
               {totalEventsCount} actividades registradas
             </span>
           </div>
           <p className="text-[11px] text-slate-500 mt-1">
-            Gestione de forma estructurada cada descanso, día festivo, suspensión o pausa pedagógica mes a mes.
+            Seleccione un mes en el panel izquierdo para visualizar y gestionar sus fechas y asuetos al centro.
           </p>
         </div>
 
-        {/* Action Controls & View Switcher */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* View Switcher Pills */}
-          <div className="bg-slate-200/80 p-1 rounded-xl flex items-center gap-1 border border-slate-300">
-            <button
-              type="button"
-              onClick={() => {
-                setViewMode('current');
-                setSelectedMonthKey(autoCurrentMonthKey);
-              }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                viewMode === 'current'
-                  ? 'bg-white text-blue-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>Mes en Curso</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewMode('slide')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                viewMode === 'slide'
-                  ? 'bg-white text-blue-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Sliders className="w-3.5 h-3.5 text-blue-600" />
-              <span>Por Mes (Slide)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewMode('all')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                viewMode === 'all'
-                  ? 'bg-white text-blue-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Grid className="w-3.5 h-3.5 text-blue-600" />
-              <span>Todos los Meses</span>
-            </button>
-          </div>
-
-          {/* Add Event Button */}
+        {/* Global Action Controls */}
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => handleOpenAddModal()}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-xs hover:shadow transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+            onClick={() => handleOpenAddModal(selectedMonthKey)}
+            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-xs hover:shadow transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
           >
             <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>Agregar Día / Actividad</span>
@@ -410,82 +364,29 @@ export const SuspensionesManager: React.FC<SuspensionesManagerProps> = ({
         </div>
       </div>
 
-      {/* Category Filter Pills */}
-      <div className="flex items-center gap-1.5 flex-wrap mb-4">
-        <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
-          <Filter className="w-3 h-3 text-slate-400" />
-          Filtrar:
-        </span>
-        <button
-          type="button"
-          onClick={() => setCategoryFilter('all')}
-          className={`px-2 py-0.5 rounded-full text-[11px] font-bold border transition-all ${
-            categoryFilter === 'all'
-              ? 'bg-slate-800 text-white border-slate-800 shadow-xs'
-              : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-          }`}
-        >
-          Todos ({totalEventsCount})
-        </button>
-        <button
-          type="button"
-          onClick={() => setCategoryFilter('pausa')}
-          className={`px-2 py-0.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1 ${
-            categoryFilter === 'pausa'
-              ? 'bg-indigo-700 text-white border-indigo-700 shadow-xs'
-              : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
-          }`}
-        >
-          <Coffee className="w-3 h-3" />
-          Pausas Pedagógicas ({countsByCategory.pausa})
-        </button>
-        <button
-          type="button"
-          onClick={() => setCategoryFilter('feriado')}
-          className={`px-2 py-0.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1 ${
-            categoryFilter === 'feriado'
-              ? 'bg-amber-700 text-white border-amber-700 shadow-xs'
-              : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
-          }`}
-        >
-          <Sun className="w-3 h-3" />
-          Feriados / Asuetos ({countsByCategory.feriado})
-        </button>
-        <button
-          type="button"
-          onClick={() => setCategoryFilter('institucional')}
-          className={`px-2 py-0.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1 ${
-            categoryFilter === 'institucional'
-              ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-              : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100'
-          }`}
-        >
-          <Building2 className="w-3 h-3" />
-          Institucionales ({countsByCategory.institucional})
-        </button>
-        <button
-          type="button"
-          onClick={() => setCategoryFilter('evaluacion')}
-          className={`px-2 py-0.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1 ${
-            categoryFilter === 'evaluacion'
-              ? 'bg-blue-700 text-white border-blue-700 shadow-xs'
-              : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
-          }`}
-        >
-          <FileCheck className="w-3 h-3" />
-          Evaluaciones ({countsByCategory.evaluacion})
-        </button>
-      </div>
+      {/* TWO-COLUMN LAYOUT: Left Months Sidebar + Center Dates & Month Slide */}
+      <div className="flex flex-col md:flex-row items-start gap-4">
+        
+        {/* LEFT COLUMN: Meses del Año (Vertical Selector) */}
+        <div className="w-full md:w-56 lg:w-64 shrink-0 bg-white rounded-2xl border border-slate-200 p-3 shadow-xs space-y-2">
+          <div className="flex items-center justify-between px-1 pb-2 border-b border-slate-100">
+            <div className="flex items-center gap-1.5">
+              <CalendarRange className="w-3.5 h-3.5 text-blue-600" />
+              <span className="text-xs font-black uppercase tracking-wider text-slate-800">
+                Meses del Año
+              </span>
+            </div>
+            <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-full border border-slate-200">
+              12 Meses
+            </span>
+          </div>
 
-      {/* VIEW MODE 1 & 2: SLIDE / MES EN CURSO */}
-      {(viewMode === 'slide' || viewMode === 'current') && (
-        <div className="space-y-3">
-          {/* Month Selector Tabs / Slider Bar */}
-          <div className="flex items-center gap-1 overflow-x-auto pb-1.5 scrollbar-thin">
-            {MONTH_NAMES_ORDER.map((m) => {
+          {/* Month buttons list */}
+          <div className="flex md:flex-col gap-1 overflow-x-auto md:overflow-y-auto md:max-h-[620px] pb-2 md:pb-0 scrollbar-thin">
+            {MONTH_NAMES_ORDER.map((m, idx) => {
               const mData = safeMonths.find((item) => item.month === m.key);
               const eventCount = mData?.eventos?.length || 0;
-              const isSelected = selectedMonthKey === m.key;
+              const isSelected = selectedMonthKey === m.key && viewMode !== 'all';
               const isRealCurrent = autoCurrentMonthKey === m.key;
 
               return (
@@ -494,281 +395,445 @@ export const SuspensionesManager: React.FC<SuspensionesManagerProps> = ({
                   type="button"
                   onClick={() => {
                     setSelectedMonthKey(m.key);
-                    if (viewMode === 'current' && m.key !== autoCurrentMonthKey) {
-                      setViewMode('slide');
-                    }
+                    setViewMode('slide');
                   }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 border shrink-0 ${
+                  className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-all flex items-center justify-between gap-2 shrink-0 md:shrink border cursor-pointer ${
                     isSelected
-                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm font-bold'
                       : isRealCurrent
-                      ? 'bg-blue-50/80 text-blue-800 border-blue-300 hover:bg-blue-100'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                      ? 'bg-blue-50/70 text-blue-900 border-blue-200 hover:bg-blue-100 font-semibold'
+                      : 'bg-white text-slate-700 border-slate-200/80 hover:bg-slate-50 hover:border-slate-300 font-medium'
                   }`}
                 >
-                  <span>{m.name}</span>
-                  {eventCount > 0 && (
+                  <div className="flex items-center gap-2 min-w-0">
                     <span
-                      className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded-full ${
+                      className={`text-[10px] font-mono font-bold w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
+                        isSelected
+                          ? 'bg-white/20 text-white'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {String(idx + 1).padStart(2, '0')}
+                    </span>
+                    <div className="truncate">
+                      <span className="capitalize block truncate">{m.name}</span>
+                      <span
+                        className={`text-[10px] block leading-none mt-0.5 ${
+                          isSelected ? 'text-blue-100' : 'text-slate-400'
+                        }`}
+                      >
+                        {mData?.semanas || 0} sem · {mData?.dias || 0} días
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isRealCurrent && (
+                      <span
+                        className={`text-[9px] font-black uppercase px-1.5 py-0.2 rounded ${
+                          isSelected
+                            ? 'bg-amber-400 text-slate-950 font-bold'
+                            : 'bg-amber-100 text-amber-900 border border-amber-300'
+                        }`}
+                      >
+                        Hoy
+                      </span>
+                    )}
+                    <span
+                      className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded-full min-w-[20px] text-center ${
                         isSelected
                           ? 'bg-white/25 text-white'
-                          : 'bg-slate-100 text-slate-700 border border-slate-300'
+                          : eventCount > 0
+                          ? 'bg-slate-100 text-slate-700 border border-slate-300'
+                          : 'bg-slate-50 text-slate-400 border border-slate-200'
                       }`}
                     >
                       {eventCount}
                     </span>
-                  )}
-                  {isRealCurrent && (
-                    <span
-                      className={`text-[9px] font-black uppercase px-1 rounded ${
-                        isSelected ? 'bg-amber-400 text-slate-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
-                      }`}
-                    >
-                      Hoy
-                    </span>
-                  )}
+                  </div>
                 </button>
               );
             })}
           </div>
 
-          {/* Active Month Slide Card */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-5 transition-all">
-            {/* Slide Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={handlePrevMonth}
-                  className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors"
-                  title="Mes anterior"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-base font-extrabold text-slate-900 capitalize">
-                      {activeMonthData.name} 2026
-                    </h4>
-                    {selectedMonthKey === autoCurrentMonthKey && (
-                      <span className="text-[10px] font-extrabold bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full border border-blue-200 flex items-center gap-1">
-                        <Sparkles className="w-3 h-3 text-blue-600" />
-                        Mes en Curso
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-0.5">
-                    <span>
-                      <strong>{activeMonthData.semanas}</strong> semanas laborales
-                    </span>
-                    <span>•</span>
-                    <span>
-                      <strong>{activeMonthData.dias}</strong> días lectivos
-                    </span>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleNextMonth}
-                  className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors"
-                  title="Mes siguiente"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleOpenAddModal(selectedMonthKey)}
-                  className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Agregar en {activeMonthData.name}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Event List in Active Month */}
-            {(() => {
-              const events = (activeMonthData.eventos || []).filter(
-                (ev) => categoryFilter === 'all' || ev.tipo === categoryFilter
-              );
-
-              if (events.length === 0) {
-                return (
-                  <div className="py-8 text-center bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
-                    <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                    <p className="text-slate-600 font-bold text-xs">
-                      No hay actividades registradas en {activeMonthData.name} con los filtros actuales.
-                    </p>
-                    <p className="text-slate-400 text-[11px] mt-0.5">
-                      Haga clic en agregar para registrar un descanso, asueto o pausa pedagógica.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenAddModal(selectedMonthKey)}
-                      className="mt-3 px-3 py-1 bg-white border border-slate-300 hover:border-blue-500 text-blue-700 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Registrar en {activeMonthData.name}
-                    </button>
-                  </div>
-                );
-              }
-
-              return (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                  {events.map((ev) => {
-                    const catMeta = SUSPENSION_CATEGORIES[ev.tipo] || SUSPENSION_CATEGORIES.institucional;
-                    return (
-                      <div
-                        key={ev.id}
-                        className={`p-3 rounded-xl border transition-all relative group flex flex-col justify-between ${catMeta.cardBg} ${catMeta.badgeBorder}`}
-                      >
-                        <div>
-                          <div className="flex items-start justify-between gap-1.5 mb-1.5">
-                            <span className="font-mono font-black text-xs px-2 py-0.5 rounded bg-white text-slate-900 border border-slate-300 shadow-2xs">
-                              📅 {ev.dia}
-                            </span>
-                            <span
-                              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border flex items-center gap-1 ${catMeta.badgeBg} ${catMeta.badgeText} ${catMeta.badgeBorder}`}
-                            >
-                              {renderCategoryIcon(ev.tipo)}
-                              {catMeta.shortLabel}
-                            </span>
-                          </div>
-                          <p className="text-xs font-bold text-slate-800 leading-snug">
-                            {ev.actividad}
-                          </p>
-                        </div>
-
-                        {/* Actions */}
-                        <div className="flex items-center justify-end gap-1 mt-2.5 pt-1.5 border-t border-slate-200/60">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(ev)}
-                            className="p-1 rounded text-slate-500 hover:text-blue-700 hover:bg-white transition-colors"
-                            title="Editar actividad"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteEvent(ev.id, ev.mes)}
-                            className="p-1 rounded text-slate-500 hover:text-rose-700 hover:bg-white transition-colors"
-                            title="Eliminar actividad"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
+          {/* Toggle to view all months grid if desired */}
+          <div className="pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setViewMode(viewMode === 'all' ? 'slide' : 'all')}
+              className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border cursor-pointer ${
+                viewMode === 'all'
+                  ? 'bg-slate-800 text-white border-slate-800 shadow-xs'
+                  : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+              }`}
+            >
+              <Grid className="w-3.5 h-3.5" />
+              <span>{viewMode === 'all' ? 'Volver a Slide de Mes' : 'Ver Todos los Meses'}</span>
+            </button>
           </div>
         </div>
-      )}
 
-      {/* VIEW MODE 3: ALL MONTHS GRID */}
-      {viewMode === 'all' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-          {safeMonths.map((m) => {
-            const isCurrent = autoCurrentMonthKey === m.month;
-            const events = (m.eventos || []).filter(
-              (ev) => categoryFilter === 'all' || ev.tipo === categoryFilter
-            );
+        {/* CENTER / MAIN COLUMN: Slide de Mes + Filtros Organizados + Fechas */}
+        <div className="flex-1 min-w-0 w-full space-y-4">
+          
+          {/* VIEW MODE: SLIDE / MES EN CURSO */}
+          {viewMode !== 'all' && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-5 transition-all space-y-4">
+              
+              {/* Slide Header: Navigation & Month Info */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handlePrevMonth}
+                    className="p-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 transition-colors shadow-2xs"
+                    title="Mes anterior"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
 
-            return (
-              <div
-                key={m.month}
-                className={`p-3.5 rounded-2xl border bg-white shadow-2xs transition-all flex flex-col justify-between ${
-                  isCurrent ? 'ring-2 ring-blue-500 border-blue-300' : 'border-slate-200'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-extrabold text-slate-900 text-xs capitalize">
-                        {m.name}
-                      </span>
-                      {isCurrent && (
-                        <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300">
-                          Actual
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-lg font-black text-slate-900 capitalize tracking-tight">
+                        {activeMonthData.name} 2026
+                      </h4>
+                      {selectedMonthKey === autoCurrentMonthKey && (
+                        <span className="text-[10px] font-extrabold bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full border border-blue-200 flex items-center gap-1">
+                          <Sparkles className="w-3 h-3 text-blue-600" />
+                          Mes en Curso
                         </span>
                       )}
                     </div>
-                    <span className="text-[10px] font-bold text-slate-500">
-                      {m.dias} días • {events.length} act.
-                    </span>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                      <span className="font-semibold text-slate-700">
+                        {activeMonthData.semanas} semanas laborales
+                      </span>
+                      <span>•</span>
+                      <span className="font-semibold text-slate-700">
+                        {activeMonthData.dias} días lectivos
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    {events.length === 0 ? (
-                      <p className="text-[11px] text-slate-400 italic py-1">Sin actividades</p>
-                    ) : (
-                      events.map((ev) => {
-                        const catMeta = SUSPENSION_CATEGORIES[ev.tipo] || SUSPENSION_CATEGORIES.institucional;
-                        return (
-                          <div
-                            key={ev.id}
-                            className={`p-1.5 rounded-lg border text-[11px] flex items-start justify-between gap-1.5 ${catMeta.cardBg} ${catMeta.badgeBorder}`}
-                          >
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1 mb-0.5">
-                                <span className="font-mono font-bold text-slate-900 bg-white px-1 py-0.2 rounded border border-slate-300 text-[10px]">
-                                  {ev.dia}
-                                </span>
-                                <span
-                                  className={`text-[9px] font-extrabold px-1 rounded ${catMeta.badgeBg} ${catMeta.badgeText}`}
-                                >
-                                  {catMeta.shortLabel}
-                                </span>
-                              </div>
-                              <p className="text-slate-800 font-medium truncate">{ev.actividad}</p>
-                            </div>
-                            <div className="flex items-center shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditModal(ev)}
-                                className="p-0.5 text-slate-400 hover:text-blue-700"
-                              >
-                                <Edit2 className="w-3 h-3" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteEvent(ev.id, ev.mes)}
-                                className="p-0.5 text-slate-400 hover:text-rose-700"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-2.5 pt-2 border-t border-slate-100 flex justify-end">
                   <button
                     type="button"
-                    onClick={() => handleOpenAddModal(m.month)}
-                    className="text-[10px] font-bold text-blue-700 hover:text-blue-900 inline-flex items-center gap-1"
+                    onClick={handleNextMonth}
+                    className="p-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 transition-colors shadow-2xs"
+                    title="Mes siguiente"
                   >
-                    <Plus className="w-3 h-3" />
-                    <span>Agregar</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenAddModal(selectedMonthKey)}
+                    className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Agregar en {activeMonthData.name}</span>
                   </button>
                 </div>
               </div>
-            );
-          })}
+
+              {/* FILTROS ORGANIZADOS: Cerca del Slide de Mes */}
+              <div className="bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
+                  <Filter className="w-3 h-3 text-slate-400" />
+                  Filtrar actividades:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${
+                    categoryFilter === 'all'
+                      ? 'bg-slate-800 text-white border-slate-800 shadow-xs'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  Todos ({totalEventsCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('pausa')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'pausa'
+                      ? 'bg-indigo-700 text-white border-indigo-700 shadow-xs'
+                      : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+                  }`}
+                >
+                  <Coffee className="w-3 h-3" />
+                  Pausas Pedagógicas ({countsByCategory.pausa})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('feriado')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'feriado'
+                      ? 'bg-amber-700 text-white border-amber-700 shadow-xs'
+                      : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <Sun className="w-3 h-3" />
+                  Feriados / Asuetos ({countsByCategory.feriado})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('institucional')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'institucional'
+                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  <Building2 className="w-3 h-3" />
+                  Institucionales ({countsByCategory.institucional})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('evaluacion')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'evaluacion'
+                      ? 'bg-blue-700 text-white border-blue-700 shadow-xs'
+                      : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
+                  }`}
+                >
+                  <FileCheck className="w-3 h-3" />
+                  Evaluaciones ({countsByCategory.evaluacion})
+                </button>
+              </div>
+
+              {/* Event Cards Grid for Selected Month */}
+              {(() => {
+                const events = (activeMonthData.eventos || []).filter(
+                  (ev) => categoryFilter === 'all' || ev.tipo === categoryFilter
+                );
+
+                if (events.length === 0) {
+                  return (
+                    <div className="py-12 text-center bg-slate-50/60 rounded-2xl border border-dashed border-slate-200">
+                      <Calendar className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                      <p className="text-slate-700 font-bold text-sm">
+                        No hay actividades en {activeMonthData.name} con el filtro seleccionado.
+                      </p>
+                      <p className="text-slate-400 text-xs mt-1">
+                        Haga clic en agregar para registrar un asueto, pausa o evento institucional.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenAddModal(selectedMonthKey)}
+                        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-xs hover:bg-blue-700 transition-colors inline-flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                        <span>Registrar Actividad en {activeMonthData.name}</span>
+                      </button>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {events.map((ev) => {
+                      const catMeta = SUSPENSION_CATEGORIES[ev.tipo] || SUSPENSION_CATEGORIES.institucional;
+                      return (
+                        <div
+                          key={ev.id}
+                          className={`p-3.5 rounded-2xl border transition-all relative group flex flex-col justify-between shadow-2xs hover:shadow-sm ${catMeta.cardBg} ${catMeta.badgeBorder}`}
+                        >
+                          <div>
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <span className="font-mono font-black text-xs px-2.5 py-1 rounded-lg bg-white text-slate-900 border border-slate-300 shadow-2xs">
+                                📅 {ev.dia}
+                              </span>
+                              <span
+                                className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border flex items-center gap-1 ${catMeta.badgeBg} ${catMeta.badgeText} ${catMeta.badgeBorder}`}
+                              >
+                                {renderCategoryIcon(ev.tipo)}
+                                {catMeta.shortLabel}
+                              </span>
+                            </div>
+                            <p className="text-xs font-bold text-slate-800 leading-snug">
+                              {ev.actividad}
+                            </p>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex items-center justify-end gap-1.5 mt-3 pt-2 border-t border-slate-200/60">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditModal(ev)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-white border border-transparent hover:border-slate-200 transition-colors"
+                              title="Editar actividad"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteEvent(ev.id, ev.mes)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-700 hover:bg-white border border-transparent hover:border-slate-200 transition-colors"
+                              title="Eliminar actividad"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* VIEW MODE: ALL MONTHS GRID */}
+          {viewMode === 'all' && (
+            <div className="space-y-4">
+              <div className="bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
+                  <Filter className="w-3 h-3 text-slate-400" />
+                  Filtrar todas las actividades:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${
+                    categoryFilter === 'all'
+                      ? 'bg-slate-800 text-white border-slate-800 shadow-xs'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  Todos ({totalEventsCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('pausa')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'pausa'
+                      ? 'bg-indigo-700 text-white border-indigo-700 shadow-xs'
+                      : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+                  }`}
+                >
+                  <Coffee className="w-3 h-3" />
+                  Pausas ({countsByCategory.pausa})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('feriado')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'feriado'
+                      ? 'bg-amber-700 text-white border-amber-700 shadow-xs'
+                      : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <Sun className="w-3 h-3" />
+                  Feriados ({countsByCategory.feriado})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('institucional')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'institucional'
+                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  <Building2 className="w-3 h-3" />
+                  Institucionales ({countsByCategory.institucional})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('evaluacion')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    categoryFilter === 'evaluacion'
+                      ? 'bg-blue-700 text-white border-blue-700 shadow-xs'
+                      : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
+                  }`}
+                >
+                  <FileCheck className="w-3 h-3" />
+                  Evaluaciones ({countsByCategory.evaluacion})
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {safeMonths.map((m) => {
+                  const isCurrent = autoCurrentMonthKey === m.month;
+                  const events = (m.eventos || []).filter(
+                    (ev) => categoryFilter === 'all' || ev.tipo === categoryFilter
+                  );
+
+                  return (
+                    <div
+                      key={m.month}
+                      onClick={() => {
+                        setSelectedMonthKey(m.month);
+                        setViewMode('slide');
+                      }}
+                      className={`p-3.5 rounded-2xl border bg-white shadow-2xs transition-all flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-xs ${
+                        isCurrent ? 'ring-2 ring-blue-500 border-blue-300' : 'border-slate-200'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-extrabold text-slate-900 text-xs capitalize">
+                              {m.name}
+                            </span>
+                            {isCurrent && (
+                              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                                Actual
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-bold text-slate-500">
+                            {m.dias} días • {events.length} act.
+                          </span>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {events.length === 0 ? (
+                            <p className="text-[11px] text-slate-400 italic py-1">Sin actividades</p>
+                          ) : (
+                            events.map((ev) => {
+                              const catMeta = SUSPENSION_CATEGORIES[ev.tipo] || SUSPENSION_CATEGORIES.institucional;
+                              return (
+                                <div
+                                  key={ev.id}
+                                  className={`p-1.5 rounded-lg border text-[11px] flex items-start justify-between gap-1.5 ${catMeta.cardBg} ${catMeta.badgeBorder}`}
+                                >
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1 mb-0.5">
+                                      <span className="font-mono font-bold text-slate-900 bg-white px-1 py-0.2 rounded border border-slate-300 text-[10px]">
+                                        {ev.dia}
+                                      </span>
+                                      <span
+                                        className={`text-[9px] font-extrabold px-1 rounded ${catMeta.badgeBg} ${catMeta.badgeText}`}
+                                      >
+                                        {catMeta.shortLabel}
+                                      </span>
+                                    </div>
+                                    <p className="text-slate-800 font-medium truncate">{ev.actividad}</p>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold text-blue-600">
+                        <span>Ver detalle del mes</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
         </div>
-      )}
+      </div>
 
       {/* ADD / EDIT EVENT MODAL WITH VISUAL CALENDAR PICKER */}
       {isFormOpen && (

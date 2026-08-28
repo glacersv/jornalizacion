@@ -258,20 +258,20 @@ export const PrintDocumentArea: React.FC<PrintDocumentAreaProps> = ({
                     <td className="p-1.5 text-left font-bold text-slate-900 border-r border-slate-400">
                       {m.codigo}
                     </td>
-                    <td className="p-1.5 border-r border-slate-300">{m.desarrolloTecnico}</td>
-                    <td className="p-1.5 border-r border-slate-300">{m.desarrolloEmprendedor}</td>
-                    <td className="p-1.5 border-r border-slate-300">{m.desarrolloHumanoSocial}</td>
-                    <td className="p-1.5 border-r border-slate-400">{m.desarrolloAcademicoAplicado}</td>
+                    <td className="p-1.5 border-r border-slate-300">{m.desarrolloTecnico ?? 0}</td>
+                    <td className="p-1.5 border-r border-slate-300">{m.desarrolloEmprendedor ?? 0}</td>
+                    <td className="p-1.5 border-r border-slate-300">{m.desarrolloHumanoSocial ?? 0}</td>
+                    <td className="p-1.5 border-r border-slate-400">{m.desarrolloAcademicoAplicado ?? 0}</td>
                     <td className="p-1.5 font-bold border-r border-slate-400 bg-slate-50">
-                      {m.totalIndicadores}
+                      {m.totalIndicadores ?? 0}
                     </td>
-                    <td className="p-1.5 border-r border-slate-400">{m.horasSemanales}</td>
-                    <td className="p-1.5 font-semibold border-r border-slate-400">{m.duracionHoras}</td>
-                    <td className="p-1.5 border-r border-slate-300">{m.horasPorUnidad.u1}</td>
-                    <td className="p-1.5 border-r border-slate-300">{m.horasPorUnidad.u2 || '-'}</td>
-                    <td className="p-1.5 border-r border-slate-300">{m.horasPorUnidad.u3 || '-'}</td>
-                    <td className="p-1.5 border-r border-slate-400">{m.horasPorUnidad.u4 || '-'}</td>
-                    <td className="p-1.5 font-bold bg-blue-50/50">{m.totalHoras}</td>
+                    <td className="p-1.5 border-r border-slate-400">{m.horasSemanales ?? 18}</td>
+                    <td className="p-1.5 font-semibold border-r border-slate-400">{m.duracionHoras ?? m.totalHoras ?? 0}</td>
+                    <td className="p-1.5 border-r border-slate-300">{m.horasPorUnidad?.u1 ?? m.duracionHoras ?? m.totalHoras ?? 0}</td>
+                    <td className="p-1.5 border-r border-slate-300">{m.horasPorUnidad?.u2 || '-'}</td>
+                    <td className="p-1.5 border-r border-slate-300">{m.horasPorUnidad?.u3 || '-'}</td>
+                    <td className="p-1.5 border-r border-slate-400">{m.horasPorUnidad?.u4 || '-'}</td>
+                    <td className="p-1.5 font-bold bg-blue-50/50">{m.totalHoras ?? 0}</td>
                   </tr>
                 ))}
                 <tr className="bg-slate-100 font-bold border-t-2 border-slate-400 text-slate-900">

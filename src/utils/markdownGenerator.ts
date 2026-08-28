@@ -25,7 +25,7 @@ export function generateJornalizacionMarkdown(
 
   // Table 2 rows
   const t2Rows = modules.map((m) => {
-    return `| ${m.codigo} | ${m.desarrolloTecnico} | ${m.desarrolloEmprendedor} | ${m.desarrolloHumanoSocial} | ${m.desarrolloAcademicoAplicado} | ${m.totalIndicadores} | ${m.horasSemanales} | ${m.totalHoras} | ${m.horasPorUnidad.u1} | | | | ${m.totalHoras} |`;
+    return `| ${m.codigo} | ${m.desarrolloTecnico || 0} | ${m.desarrolloEmprendedor || 0} | ${m.desarrolloHumanoSocial || 0} | ${m.desarrolloAcademicoAplicado || 0} | ${m.totalIndicadores || 0} | ${m.horasSemanales || 18} | ${m.totalHoras || 0} | ${m.horasPorUnidad?.u1 ?? m.totalHoras ?? 0} | | | | ${m.totalHoras || 0} |`;
   }).join('\n');
 
   // Table 3 headers & rows (INI / FIN for each month)

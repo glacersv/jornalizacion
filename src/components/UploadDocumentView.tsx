@@ -12,11 +12,9 @@ import {
   ArrowRight,
   ShieldCheck,
   HelpCircle,
-  Layers,
   Eye,
   FileCode,
   Calendar,
-  GraduationCap,
   Loader2,
   Trash2,
   Plus,
@@ -24,21 +22,28 @@ import {
   SlidersHorizontal,
   Clock,
   BookOpen,
-  CalendarDays,
   Check,
+  Clipboard,
+  Eraser,
+  RefreshCw,
   FileCheck2,
-  Info,
-  ChevronRight,
-  ChevronLeft,
+  FolderOpen,
+  CalendarDays,
+  Award,
 } from 'lucide-react';
-import { InstitutionalHeader, ModuleDescriptor, MonthStats, AcademicPeriod, SuspensionEvent } from '../types';
+import { InstitutionalHeader, ModuleDescriptor, MonthStats, AcademicPeriod } from '../types';
 import {
   parsePdfFile,
+  parseWordFile,
+  parseTextFile,
   parseExcelFile,
   parseJsonContent,
+  analyzeExtractedText,
   ParsedDocumentResult,
   generateExcelTemplateWorkbook,
   recalculateModuleDatesFromCalendar,
+  createEmpty12Months,
+  SPANISH_MONTH_NAMES,
 } from '../utils/fileImportParsers';
 import { academicPeriods2026, monthsData2026, modulesData1stYear, modulesData2ndYear, modulesData3rdYear } from '../data/jornalizacionData';
 import saveAs from 'file-saver';
@@ -48,6 +53,8 @@ interface UploadDocumentViewProps {
   headerData: InstitutionalHeader;
   months: MonthStats[];
   modules: ModuleDescriptor[];
+  currentGrade?: '10' | '11' | '12';
+  onSelectGrade?: (grade: '10' | '11' | '12') => void;
   onImportData: (data: {
     headerData?: InstitutionalHeader;
     months?: MonthStats[];
@@ -55,6 +62,11 @@ interface UploadDocumentViewProps {
     targetGrade?: '10' | '11' | '12';
   }) => void;
   onResetToDefaults: () => void;
+  onRestoreOfficialModules?: () => void;
+  onClearData: (allGrades?: boolean) => void;
+  onClearDates?: (allGrades?: boolean) => void;
+  onClearCalendar?: () => void;
+  onRecalculateDates?: () => void;
   onGoToJornalizacion: () => void;
   onGoToCalendario: () => void;
 }
@@ -63,25 +75,46 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
   headerData,
   months,
   modules,
+  currentGrade = '11',
+  onSelectGrade,
   onImportData,
   onResetToDefaults,
+  onRestoreOfficialModules,
+  onClearData,
+  onClearDates,
+  onClearCalendar,
+  onRecalculateDates,
   onGoToJornalizacion,
   onGoToCalendario,
 }) => {
   // Method selection tab: 'metodo1_lector' | 'metodo2_plantilla' | 'metodo3_formulario'
   const [activeMethod, setActiveMethod] = useState<'metodo1_lector' | 'metodo2_plantilla' | 'metodo3_formulario'>('metodo1_lector');
 
-  // Drag & Drop State
+  // Input source in Method 1: 'archivo' | 'pegar_texto' | 'json'
+  const [method1Source, setMethod1Source] = useState<'archivo' | 'pegar_texto' | 'json'>('archivo');
+
+  // Drag & Drop and Processing State
   const [dragActive, setDragActive] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('');
+  const [rawPastedText, setRawPastedText] = useState('');
   const [jsonText, setJsonText] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Parsed and Editable Preview State
   const [parsedResult, setParsedResult] = useState<ParsedDocumentResult | null>(null);
-  const [activePreviewTab, setActivePreviewTab] = useState<'modulos' | 'calendario' | 'periodos' | 'encabezado' | 'texto'>('modulos');
+  const [editableModules, setEditableModules] = useState<ModuleDescriptor[]>([]);
+  const [editableMonths, setEditableMonths] = useState<MonthStats[]>(JSON.parse(JSON.stringify(months)));
+  const [editablePeriods, setEditablePeriods] = useState<AcademicPeriod[]>(JSON.parse(JSON.stringify(academicPeriods2026)));
+  const [editableHeader, setEditableHeader] = useState<Partial<InstitutionalHeader>>({});
+  const [activePreviewTab, setActivePreviewTab] = useState<'modulos' | 'calendario' | 'periodos' | 'encabezado'>('modulos');
+  
+  // Clear modal confirmation state
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearScope, setClearScope] = useState<'current' | 'all' | 'dates_current' | 'dates_all' | 'calendar_zero'>('current');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const templateInputRef = useRef<HTMLInputElement>(null);
 
   // Method 3: Interactive Wizard Form State
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4 | 5>(1);
@@ -97,47 +130,101 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
   const totalSemanas = months.reduce((acc, m) => acc + (Number(m.semanas) || 0), 0);
   const totalDias = months.reduce((acc, m) => acc + (Number(m.dias) || 0), 0);
 
-  // Wizard stats
-  const wizardTotalHoras = wizardModules.reduce((acc, m) => acc + (Number(m.totalHoras) || 0), 0);
-  const wizardTotalSemanas = wizardMonths.reduce((acc, m) => acc + (Number(m.semanas) || 0), 0);
-  const wizardTotalDias = wizardMonths.reduce((acc, m) => acc + (Number(m.dias) || 0), 0);
+  const previewTotalSemanas = editableMonths.reduce((acc, m) => acc + (Number(m.semanas) || 0), 0);
+  const previewTotalDias = editableMonths.reduce((acc, m) => acc + (Number(m.dias) || 0), 0);
+
+  // Synchronize editable states when parsedResult updates
+  const updateParsedResult = (result: ParsedDocumentResult) => {
+    setParsedResult(result);
+
+    const monthsToUse = (result.months && result.months.length > 0)
+      ? JSON.parse(JSON.stringify(result.months))
+      : JSON.parse(JSON.stringify(months));
+    setEditableMonths(monthsToUse);
+
+    const periodsToUse = (result.periods && result.periods.length > 0)
+      ? JSON.parse(JSON.stringify(result.periods))
+      : JSON.parse(JSON.stringify(academicPeriods2026));
+    setEditablePeriods(periodsToUse);
+
+    if (result.headerData) {
+      setEditableHeader(JSON.parse(JSON.stringify(result.headerData)));
+    } else {
+      setEditableHeader({});
+    }
+
+    if (result.modules && result.modules.length > 0) {
+      setEditableModules(JSON.parse(JSON.stringify(result.modules)));
+      setActivePreviewTab('modulos');
+    } else {
+      // If the document is a calendar/asuetos file without module list,
+      // KEEP existing modules and recalculate their dates to the new calendar!
+      const existingToKeep = modules.length > 0
+        ? modules
+        : (currentGrade === '10' ? modulesData1stYear : currentGrade === '12' ? modulesData3rdYear : modulesData2ndYear);
+      const syncedWithNewCalendar = recalculateModuleDatesFromCalendar(existingToKeep, monthsToUse, periodsToUse);
+      setEditableModules(syncedWithNewCalendar);
+      setActivePreviewTab('calendario');
+    }
+  };
 
   const handleFileProcess = async (file: File) => {
     setErrorMsg(null);
     setSuccessMsg(null);
     setParsedResult(null);
+    setEditableModules([]);
     setIsLoading(true);
     const fileNameLower = file.name.toLowerCase();
 
     try {
       if (fileNameLower.endsWith('.pdf')) {
-        setLoadingText('Leyendo y analizando documento PDF con lector inteligente...');
+        setLoadingText('Leyendo y analizando documento PDF con extractor inteligente...');
         const result = await parsePdfFile(file);
-        setParsedResult(result);
-        setSuccessMsg(`¡PDF "${file.name}" leído exitosamente! Se identificaron ${result.summary.modulesCount} módulos y la estructura institucional.`);
+        updateParsedResult(result);
+        setSuccessMsg(`¡PDF "${file.name}" leído exitosamente! Se identificaron ${result.summary.modulesCount} módulos y ${result.summary.monthsCount} meses de calendario.`);
+      } else if (
+        fileNameLower.endsWith('.docx') ||
+        fileNameLower.endsWith('.doc')
+      ) {
+        setLoadingText('Extrayendo texto, tablas y calendario de documento Word...');
+        const result = await parseWordFile(file);
+        updateParsedResult(result);
+        setSuccessMsg(`¡Documento Word "${file.name}" procesado con éxito! (${result.summary.modulesCount} módulos encontrados).`);
       } else if (
         fileNameLower.endsWith('.xlsx') ||
         fileNameLower.endsWith('.xls') ||
         fileNameLower.endsWith('.csv')
       ) {
-        setLoadingText('Analizando hojas de cálculo Excel...');
+        setLoadingText('Analizando hojas de cálculo Excel, extrayendo calendario de meses, semanas y módulos...');
         const result = await parseExcelFile(file);
-        setParsedResult(result);
-        setSuccessMsg(`¡Archivo Excel "${file.name}" analizado con éxito!`);
+        updateParsedResult(result);
+        setSuccessMsg(`¡Archivo Excel "${file.name}" analizado con éxito! (${result.summary.modulesCount} módulos y 12 meses de calendario).`);
+      } else if (
+        fileNameLower.endsWith('.txt') ||
+        fileNameLower.endsWith('.md') ||
+        fileNameLower.endsWith('.rtf')
+      ) {
+        setLoadingText('Analizando texto, semanas y estructura curricular...');
+        const result = await parseTextFile(file);
+        updateParsedResult(result);
+        setSuccessMsg(`¡Archivo de texto "${file.name}" analizado con éxito!`);
       } else if (fileNameLower.endsWith('.json')) {
         setLoadingText('Leyendo archivo de respaldo JSON...');
         const text = await file.text();
         const result = parseJsonContent(text, file.name, file.size);
-        setParsedResult(result);
+        updateParsedResult(result);
         setSuccessMsg(`¡Archivo JSON "${file.name}" validado correctamente!`);
       } else {
-        setErrorMsg('Formato no soportado. Por favor suba un archivo PDF (.pdf), Excel (.xlsx/.xls/.csv) o JSON (.json).');
+        setErrorMsg('Formato no soportado. Suba un archivo Excel (.xlsx/.xls/.csv), Word (.docx/.doc), PDF (.pdf), Texto (.txt) o JSON (.json).');
       }
     } catch (err: any) {
-      console.error(err);
-      setErrorMsg(`Error al procesar el archivo: ${err?.message || 'Verifique que el archivo no esté protegido.'}`);
+      console.error('File parsing error:', err);
+      setErrorMsg(`Error al procesar el archivo: ${err?.message || 'Verifique que el archivo no esté dañado ni protegido.'}`);
     } finally {
       setIsLoading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -166,22 +253,108 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
     }
   };
 
+  const handleProcessPastedText = () => {
+    if (!rawPastedText.trim()) {
+      setErrorMsg('Por favor pegue algún texto o tabla en el área de texto.');
+      return;
+    }
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setIsLoading(true);
+    setLoadingText('Analizando contenido de texto pegado...');
+
+    try {
+      const result = analyzeExtractedText(
+        'texto-portapapeles.txt',
+        rawPastedText.length,
+        rawPastedText,
+        'text'
+      );
+      updateParsedResult(result);
+      if (result.summary.modulesCount > 0) {
+        setSuccessMsg(`¡Se detectaron ${result.summary.modulesCount} módulos curriculares en el texto pegado!`);
+      } else {
+        setSuccessMsg('Texto analizado. Puede verificar las tablas de módulos o calendario abajo.');
+      }
+    } catch (err: any) {
+      setErrorMsg(`Error al analizar el texto: ${err?.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleApplyParsedData = () => {
-    if (!parsedResult) return;
+    if (!parsedResult && editableModules.length === 0 && editableMonths.length === 0) return;
 
     const newHeader: InstitutionalHeader = {
       ...headerData,
-      ...(parsedResult.headerData || {}),
+      ...(editableHeader || {}),
     };
+
+    // Sanitize any accidentally long texts in header
+    if (newHeader.institucion && (newHeader.institucion.length > 60 || /calendario|asamblea|distribuci|periodo|evaluaci/i.test(newHeader.institucion))) {
+      newHeader.institucion = 'Colegio Salesiano San José - Santa Ana';
+    }
+    if (newHeader.gradoSeccion && (newHeader.gradoSeccion.length > 50 || /calendario|asamblea|distribuci|periodo|evaluaci|padres|salones/i.test(newHeader.gradoSeccion))) {
+      newHeader.gradoSeccion = currentGrade === '10' ? '1° Año Tec. Voc. Diseño Gráfico' : currentGrade === '12' ? '3° Año Tec. Voc. Diseño Gráfico' : '2° Año Tec. Voc. Diseño Gráfico';
+    }
+
+    const modsToCalculate = editableModules.length > 0
+      ? editableModules
+      : (modules.length > 0 ? modules : (currentGrade === '10' ? modulesData1stYear : currentGrade === '12' ? modulesData3rdYear : modulesData2ndYear));
+
+    const finalModules = recalculateModuleDatesFromCalendar(
+      modsToCalculate,
+      editableMonths,
+      editablePeriods
+    );
 
     onImportData({
       headerData: newHeader,
-      modules: parsedResult.modules && parsedResult.modules.length > 0 ? parsedResult.modules : undefined,
-      months: parsedResult.months && parsedResult.months.length > 0 ? parsedResult.months : undefined,
-      targetGrade: parsedResult.detectedGrade,
+      modules: finalModules,
+      months: editableMonths,
+      targetGrade: parsedResult?.detectedGrade,
     });
 
-    setSuccessMsg('¡Datos aplicados con éxito a la Jornalización Curricular y al Calendario!');
+    setSuccessMsg(`¡Se sincronizaron exitosamente ${finalModules.length} módulos y el Calendario Anual (${previewTotalSemanas} sem, ${previewTotalDias} días) con el sistema!`);
+  };
+
+  const handleClearConfirmed = () => {
+    if (clearScope === 'calendar_zero') {
+      if (onClearCalendar) {
+        onClearCalendar();
+      } else {
+        onImportData({
+          months: createEmpty12Months(),
+        });
+      }
+      setShowClearConfirm(false);
+      setSuccessMsg('¡Se ha vaciado el Calendario Anual a 0 Semanas y 0 Días para todos los meses! Listo para recibir nuevas fechas.');
+      return;
+    }
+
+    if (clearScope === 'dates_current' || clearScope === 'dates_all') {
+      if (onClearDates) {
+        onClearDates(clearScope === 'dates_all');
+      }
+      setShowClearConfirm(false);
+      setSuccessMsg(
+        clearScope === 'dates_all'
+          ? '¡Se han limpiado las fechas de inicio, fin y bimestres de todos los grados! Los módulos y horas se mantienen intactos.'
+          : `¡Se han limpiado las fechas de los módulos de ${headerData.gradoSeccion}! Puede asignar nuevas fechas o recalcularlas automáticamente.`
+      );
+      return;
+    }
+
+    onClearData(clearScope === 'all');
+    setParsedResult(null);
+    setEditableModules([]);
+    setShowClearConfirm(false);
+    setSuccessMsg(
+      clearScope === 'all'
+        ? '¡Se han limpiado todos los datos de 1°, 2° y 3° Año! El sistema está en blanco listo para recibir sus archivos.'
+        : `¡Se han limpiado los módulos de ${headerData.gradoSeccion}! El espacio está listo para cargar nuevos módulos.`
+    );
   };
 
   const handleLoadOfficialPreset = () => {
@@ -192,9 +365,17 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
         anoLectivo: '2026',
       },
       months: JSON.parse(JSON.stringify(monthsData2026)),
-      modules: JSON.parse(JSON.stringify(headerData.anoNivel === '10' ? modulesData1stYear : headerData.anoNivel === '12' ? modulesData3rdYear : modulesData2ndYear)),
+      modules: JSON.parse(
+        JSON.stringify(
+          currentGrade === '10'
+            ? modulesData1stYear
+            : currentGrade === '12'
+            ? modulesData3rdYear
+            : modulesData2ndYear
+        )
+      ),
     });
-    setSuccessMsg('¡Calendario Oficial y Jornalización 2026 del Colegio Salesiano San José cargados al 100% con exactitud de fechas, semanas y días!');
+    setSuccessMsg('¡Calendario Oficial y Jornalización 2026 del Colegio Salesiano San José cargados al 100%!');
   };
 
   const handleApplyPastedJson = () => {
@@ -204,7 +385,7 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
     }
     try {
       const result = parseJsonContent(jsonText, 'texto-pegado.json');
-      setParsedResult(result);
+      updateParsedResult(result);
       setSuccessMsg('¡Texto JSON procesado correctamente!');
     } catch (err) {
       setErrorMsg('Error de sintaxis en el JSON proporcionado. Verifique llaves y comillas.');
@@ -213,22 +394,11 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
 
   const handleDownloadExcelTemplate = () => {
     const wb = generateExcelTemplateWorkbook(headerData, months, modules);
-    XLSX.writeFile(wb, `Plantilla_Oficial_Jornalizacion_${headerData.gradoSeccion.replace(/[^a-zA-Z0-9]/g, '_')}_2026.xlsx`);
+    XLSX.writeFile(
+      wb,
+      `Plantilla_Oficial_Jornalizacion_${headerData.gradoSeccion.replace(/[^a-zA-Z0-9]/g, '_')}_2026.xlsx`
+    );
     setSuccessMsg('Plantilla Excel descargada con 3 hojas: Periodos/Evaluaciones, Calendario/Días y Módulos.');
-  };
-
-  const handleDownloadCsvTemplate = () => {
-    const csvContent = "data:text/csv;charset=utf-8," + 
-      "Codigo_Modulo,Nombre_Modulo,Total_Horas,Horas_Semanales,Semanas,Fecha_Inicio,Fecha_Fin,Competencias\n" +
-      modules.map(m => `"${m.codigo}","${m.nombre}",${m.totalHoras},${m.horasSemanales},${m.semanas},"${m.fechaInicio}","${m.fechaFin}","${m.competencias || ''}"`).join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Plantilla_Modulos_${headerData.anoLectivo}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setSuccessMsg('Plantilla CSV de Módulos descargada.');
   };
 
   const handleDownloadJsonBackup = () => {
@@ -247,10 +417,69 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
     setSuccessMsg('Respaldo JSON descargado con toda la estructura de fechas y módulos.');
   };
 
+  // Editable Module Handlers
+  const handleUpdateEditableModule = (index: number, field: keyof ModuleDescriptor, value: any) => {
+    const next = [...editableModules];
+    const item = { ...next[index], [field]: value };
+    if (field === 'totalHoras') {
+      const hrs = Number(value) || 90;
+      item.totalHoras = hrs;
+      item.semanas = Math.ceil(hrs / (item.horasSemanales || 18));
+    }
+    next[index] = item;
+    setEditableModules(next);
+  };
+
+  const handleAddEditableModule = () => {
+    const num = editableModules.length + 1;
+    const newMod: ModuleDescriptor = {
+      codigo: `Módulo ${num}`,
+      nombre: `Nuevo Módulo ${num}`,
+      totalHoras: 90,
+      duracionHoras: 90,
+      horasSemanales: 18,
+      semanas: 5,
+      desarrolloTecnico: 2,
+      desarrolloEmprendedor: 2,
+      desarrolloHumanoSocial: 2,
+      desarrolloAcademicoAplicado: 2,
+      totalIndicadores: 8,
+      horasPorUnidad: { u1: 90, u2: 0, u3: 0, u4: 0 },
+      bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
+      diaInicio: 19,
+      mesInicio: 'enero',
+      diaFin: 20,
+      mesFin: 'febrero',
+      fechaInicio: '19 de enero',
+      fechaFin: '20 de febrero',
+      unidades: 3,
+      competencias: `Competencias técnicas y pedagógicas para Nuevo Módulo ${num}`,
+    };
+    setEditableModules([...editableModules, newMod]);
+  };
+
+  const handleDeleteEditableModule = (index: number) => {
+    const next = editableModules.filter((_, i) => i !== index);
+    setEditableModules(next);
+  };
+
+  // Editable Month Handlers
+  const handleUpdateEditableMonth = (index: number, field: 'semanas' | 'dias' | 'feriadosDesc', val: any) => {
+    const next = [...editableMonths];
+    if (field === 'semanas' || field === 'dias') {
+      next[index] = { ...next[index], [field]: Math.max(0, Number(val) || 0) };
+    } else {
+      next[index] = { ...next[index], [field]: String(val) };
+    }
+    setEditableMonths(next);
+  };
+
   // Wizard Step Module Add
   const handleWizardAddModule = () => {
     if (!newModuleName.trim()) return;
-    const code = newModuleCode.trim() || `BTVDG${wizardHeader.anoNivel === '10' ? '1' : wizardHeader.anoNivel === '12' ? '3' : '2'}.${wizardModules.length + 1}`;
+    const code =
+      newModuleCode.trim() ||
+      `BTVDG${wizardHeader.anoNivel === '10' ? '1' : wizardHeader.anoNivel === '12' ? '3' : '2'}.${wizardModules.length + 1}`;
     const hrs = Number(newModuleHours) || 90;
     const hrsSem = wizardHeader.horasSemanalesModulo || 18;
     const sem = Math.ceil(hrs / hrsSem);
@@ -259,8 +488,15 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
       codigo: code,
       nombre: newModuleName.trim(),
       totalHoras: hrs,
+      duracionHoras: hrs,
       horasSemanales: hrsSem,
       semanas: sem,
+      desarrolloTecnico: 2,
+      desarrolloEmprendedor: 2,
+      desarrolloHumanoSocial: 2,
+      desarrolloAcademicoAplicado: 2,
+      totalIndicadores: 8,
+      horasPorUnidad: { u1: hrs, u2: 0, u3: 0, u4: 0 },
       bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
       diaInicio: 19,
       mesInicio: 'enero',
@@ -270,7 +506,6 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
       fechaFin: '20 de febrero',
       unidades: 3,
       competencias: `Competencias técnicas para ${newModuleName.trim()}`,
-      totalIndicadores: 8,
     };
 
     const updated = [...wizardModules, newMod];
@@ -281,7 +516,7 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
   };
 
   const handleWizardRemoveModule = (code: string) => {
-    const updated = wizardModules.filter(m => m.codigo !== code);
+    const updated = wizardModules.filter((m) => m.codigo !== code);
     const recalculated = recalculateModuleDatesFromCalendar(updated, wizardMonths, academicPeriods2026);
     setWizardModules(recalculated);
   };
@@ -297,447 +532,688 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-16 animate-in fade-in duration-200">
+    <div className="space-y-6 w-full max-w-7xl mx-auto pb-16 animate-in fade-in duration-200">
       
       {/* Title & Introduction */}
       <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white rounded-2xl p-6 sm:p-8 shadow-lg border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold uppercase tracking-wider">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Centro de Carga y Sincronización de Datos</span>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 border border-blue-400/30 text-xs font-bold uppercase tracking-wider">
+            <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+            <span>Módulo Universal de Importación y Limpieza</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">
-            3 Métodos para Cargar Calendario y Jornalización
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
+            Cargar y Sincronizar Calendario y Módulos
           </h1>
-          <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
-            Elija la forma más cómoda y precisa para incorporar los datos al sistema: mediante el <strong>Lector Inteligente</strong>, llenando la <strong>Plantilla Oficial</strong> o utilizando el <strong>Formulario Asistente Paso a Paso</strong>.
+          <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+            Suba sus archivos locales de <strong>Excel (.xlsx), Word (.docx) o PDF</strong>. El lector inteligente extrae los 12 meses de calendario, semanas, días hábiles, descansos y los módulos con sus horas.
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-3 shrink-0">
-          <button
-            onClick={onGoToCalendario}
-            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center justify-center gap-2 transition-all"
-          >
-            <Calendar className="w-4 h-4 text-teal-400" />
-            <span>Fechas Institucionales</span>
-          </button>
+        <div className="flex flex-wrap md:flex-col gap-2 shrink-0">
           <button
             onClick={onGoToJornalizacion}
-            className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md"
+            className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all"
           >
             <span>Ver Jornalización</span>
             <ArrowRight className="w-4 h-4" />
           </button>
+          <button
+            onClick={onGoToCalendario}
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-2 border border-slate-700 transition-all"
+          >
+            <Calendar className="w-4 h-4 text-teal-400" />
+            <span>Ver Calendario</span>
+          </button>
         </div>
       </div>
 
-      {/* 3 Methods Tabs Selector */}
-      <div className="bg-white rounded-2xl p-2 border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-2">
-        
-        {/* Method 1 Tab */}
-        <button
-          onClick={() => setActiveMethod('metodo1_lector')}
-          className={`p-4 rounded-xl text-left transition-all flex items-start gap-3 border ${
-            activeMethod === 'metodo1_lector'
-              ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
-              : 'bg-white border-transparent hover:bg-slate-50'
-          }`}
-        >
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
-            activeMethod === 'metodo1_lector' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'
-          }`}>
-            1
+      {/* CALENDAR RESET CARD: Vaciar Calendario */}
+      <div className="bg-white rounded-2xl border border-purple-200/80 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="p-3 rounded-2xl bg-purple-100 text-purple-700 shrink-0">
+            <CalendarDays className="w-5 h-5" />
           </div>
           <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-blue-700">Método 1</div>
-            <h3 className="text-sm font-bold text-slate-900 leading-tight">Lector Inteligente PDF / Excel</h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">Analiza documentos oficiales y carga en 1 clic</p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-900">
+                Vaciar Calendario Anual (12 Meses)
+              </h2>
+              <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-bold">
+                {totalSemanas} sem · {totalDias} días
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Pone todas las semanas y días a 0 para que pueda cargar un calendario nuevo con sus fechas y asuetos desde su archivo Excel, Word o PDF.
+            </p>
           </div>
-        </button>
+        </div>
 
-        {/* Method 2 Tab */}
         <button
-          onClick={() => setActiveMethod('metodo2_plantilla')}
-          className={`p-4 rounded-xl text-left transition-all flex items-start gap-3 border ${
-            activeMethod === 'metodo2_plantilla'
-              ? 'bg-emerald-50/80 border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs'
-              : 'bg-white border-transparent hover:bg-slate-50'
-          }`}
+          id="btn-limpiar-calendario-cero"
+          onClick={() => {
+            setClearScope('calendar_zero');
+            setShowClearConfirm(true);
+          }}
+          className="px-4 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm shrink-0"
         >
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
-            activeMethod === 'metodo2_plantilla' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'
-          }`}>
-            2
-          </div>
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Método 2</div>
-            <h3 className="text-sm font-bold text-slate-900 leading-tight">Plantilla Excel / CSV</h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">Descargar formato estructurado, llenar y subir</p>
-          </div>
+          <CalendarDays className="w-4 h-4" />
+          <span>Vaciar Calendario</span>
         </button>
-
-        {/* Method 3 Tab */}
-        <button
-          onClick={() => setActiveMethod('metodo3_formulario')}
-          className={`p-4 rounded-xl text-left transition-all flex items-start gap-3 border ${
-            activeMethod === 'metodo3_formulario'
-              ? 'bg-indigo-50/80 border-indigo-500 ring-2 ring-indigo-500/20 shadow-xs'
-              : 'bg-white border-transparent hover:bg-slate-50'
-          }`}
-        >
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
-            activeMethod === 'metodo3_formulario' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
-          }`}>
-            3
-          </div>
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-indigo-700">Método 3</div>
-            <h3 className="text-sm font-bold text-slate-900 leading-tight">Formulario / Asistente</h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">Llenado guiado paso a paso con cálculo automático</p>
-          </div>
-        </button>
-
       </div>
 
-      {/* Notifications */}
+      {/* MODAL: Confirmation for Clearing Calendar */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center mx-auto bg-purple-100 text-purple-600">
+              <CalendarDays className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-base font-black text-slate-900">
+                ¿Vaciar Calendario Anual a 0 Semanas y 0 Días?
+              </h3>
+              <p className="text-xs text-slate-600">
+                Todos los 12 meses quedarán en 0 semanas y 0 días lectivos. Podrá cargar las nuevas fechas y asuetos directamente desde su archivo local.
+              </p>
+            </div>
+            <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 text-[11px] text-purple-900">
+              💡 <strong>Nota:</strong> Los módulos curriculares y sus horas no se borrarán; solo se vacían los días y semanas del calendario anual.
+            </div>
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleClearConfirmed}
+                className="py-2.5 px-4 rounded-xl text-white font-bold text-xs shadow-md transition-all bg-purple-600 hover:bg-purple-500"
+              >
+                Confirmar y Vaciar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Status Alerts */}
       {errorMsg && (
-        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-800 flex items-start gap-3 text-sm shadow-xs animate-in fade-in">
+        <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-900 text-xs flex items-start gap-3 animate-in fade-in">
           <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
           <div className="flex-1">
-            <div className="font-bold">Error de Procesamiento</div>
-            <div className="text-xs text-red-700 mt-0.5">{errorMsg}</div>
+            <h4 className="font-bold text-sm">Ocurrió un error</h4>
+            <p className="mt-0.5">{errorMsg}</p>
           </div>
+          <button onClick={() => setErrorMsg(null)} className="text-red-500 hover:text-red-800 text-xs font-bold">
+            ✕
+          </button>
         </div>
       )}
 
       {successMsg && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-start gap-3 text-sm shadow-xs animate-in fade-in">
+        <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-start gap-3 animate-in fade-in">
           <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
           <div className="flex-1">
-            <div className="font-bold">Operación Exitosa</div>
-            <div className="text-xs text-emerald-800 mt-0.5">{successMsg}</div>
+            <h4 className="font-bold text-sm">Operación Exitosa</h4>
+            <p className="mt-0.5">{successMsg}</p>
           </div>
+          <button onClick={() => setSuccessMsg(null)} className="text-emerald-600 hover:text-emerald-900 text-xs font-bold">
+            ✕
+          </button>
         </div>
       )}
 
-      {/* METHOD 1: LECTOR INTELIGENTE PDF / EXCEL / JSON */}
+      {/* Main Method Selector Tabs */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <button
+          onClick={() => setActiveMethod('metodo1_lector')}
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex items-start gap-3.5 ${
+            activeMethod === 'metodo1_lector'
+              ? 'bg-white border-blue-500 shadow-md ring-2 ring-blue-500/20'
+              : 'bg-white/80 border-slate-200 hover:bg-white text-slate-600'
+          }`}
+        >
+          <div className={`p-2.5 rounded-xl ${activeMethod === 'metodo1_lector' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+            <UploadCloud className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-black uppercase tracking-wider text-blue-700">Método 1</span>
+              <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-1.5 py-0.5 rounded-full">Recomendado</span>
+            </div>
+            <h3 className="font-bold text-sm text-slate-900 mt-0.5">Lector Inteligente</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Excel, Word o PDF con calendario y módulos</p>
+          </div>
+        </button>
+
+        <button
+          onClick={() => setActiveMethod('metodo2_plantilla')}
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex items-start gap-3.5 ${
+            activeMethod === 'metodo2_plantilla'
+              ? 'bg-white border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
+              : 'bg-white/80 border-slate-200 hover:bg-white text-slate-600'
+          }`}
+        >
+          <div className={`p-2.5 rounded-xl ${activeMethod === 'metodo2_plantilla' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+            <FileSpreadsheet className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-black uppercase tracking-wider text-emerald-700">Método 2</span>
+            </div>
+            <h3 className="font-bold text-sm text-slate-900 mt-0.5">Plantilla Excel Oficial</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Descargue la plantilla de 3 hojas y súbala</p>
+          </div>
+        </button>
+
+        <button
+          onClick={() => setActiveMethod('metodo3_formulario')}
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex items-start gap-3.5 ${
+            activeMethod === 'metodo3_formulario'
+              ? 'bg-white border-indigo-500 shadow-md ring-2 ring-indigo-500/20'
+              : 'bg-white/80 border-slate-200 hover:bg-white text-slate-600'
+          }`}
+        >
+          <div className={`p-2.5 rounded-xl ${activeMethod === 'metodo3_formulario' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+            <Edit3 className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-black uppercase tracking-wider text-indigo-700">Método 3</span>
+            </div>
+            <h3 className="font-bold text-sm text-slate-900 mt-0.5">Asistente Paso a Paso</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Formulario guiado para configurar fechas y módulos</p>
+          </div>
+        </button>
+      </div>
+
+      {/* METHOD 1: SMART READER (FILES, CLIPBOARD OR JSON) */}
       {activeMethod === 'metodo1_lector' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          <div className="lg:col-span-2 space-y-6">
+        <div className="space-y-6 w-full">
+          <div className="space-y-6 w-full">
             
-            {/* Quick 1-Click Official Institutional Preset */}
-            <div className="bg-gradient-to-r from-emerald-900 to-slate-900 text-white rounded-2xl p-5 shadow-sm border border-emerald-700/60 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                  <Sparkles className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-[11px] font-bold text-emerald-300 uppercase tracking-wider">
-                    Opción Rápida Recomendada
-                  </div>
-                  <h3 className="text-sm font-bold text-slate-100">
-                    Cargar Calendario Oficial Colegio Salesiano San José 2026
-                  </h3>
-                  <p className="text-xs text-slate-300">
-                    Inyecta al 100% todas las fechas de los 4 bimestres, ingresos a TBox, pausas pedagógicas, descansos y cálculo de 40 semanas y 182 días.
-                  </p>
-                </div>
-              </div>
+            {/* Sub-tab selectors for Method 1 */}
+            <div className="flex items-center gap-2 p-1.5 bg-slate-200/70 rounded-xl w-fit">
+              <button
+                onClick={() => setMethod1Source('archivo')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  method1Source === 'archivo' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>Subir Archivo Local</span>
+              </button>
 
               <button
-                onClick={handleLoadOfficialPreset}
-                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-md shrink-0 transition-all"
+                onClick={() => setMethod1Source('pegar_texto')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  method1Source === 'pegar_texto' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
               >
-                <Check className="w-4 h-4" />
-                <span>Cargar en 1 Clic</span>
+                <Clipboard className="w-3.5 h-3.5" />
+                <span>Pegar Texto o Tabla</span>
+              </button>
+
+              <button
+                onClick={() => setMethod1Source('json')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  method1Source === 'json' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <FileCode className="w-3.5 h-3.5" />
+                <span>JSON / Respaldo</span>
               </button>
             </div>
 
-            {/* Drop Zone Box */}
-            <div
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-2xl p-8 sm:p-10 text-center transition-all cursor-pointer flex flex-col items-center justify-center min-h-[220px] relative overflow-hidden ${
-                dragActive
-                  ? 'border-blue-500 bg-blue-50/70 scale-[1.01]'
-                  : 'border-slate-300 bg-white hover:border-blue-500 hover:bg-blue-50/30'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.xlsx,.xls,.csv,.json"
-                onChange={handleFileInputChange}
-                className="hidden"
-              />
+            {/* Sub-Tab 1: File Drag & Drop */}
+            {method1Source === 'archivo' && (
+              <div
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-3xl p-8 sm:p-12 text-center cursor-pointer transition-all bg-white relative overflow-hidden ${
+                  dragActive
+                    ? 'border-blue-500 bg-blue-50/50 scale-[1.01]'
+                    : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50/50'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv,.docx,.doc,.pdf,.txt,.json"
+                  className="hidden"
+                  onChange={handleFileInputChange}
+                />
 
-              {isLoading ? (
-                <div className="flex flex-col items-center justify-center p-6 space-y-3">
-                  <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
-                  <p className="font-bold text-slate-800 text-sm">{loadingText}</p>
-                  <p className="text-xs text-slate-500">Procesando y extrayendo estructura curricular...</p>
+                <div className="flex flex-col items-center justify-center">
+                  {isLoading ? (
+                    <div className="space-y-3 py-6">
+                      <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto" />
+                      <p className="text-xs font-bold text-slate-700">{loadingText}</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-4 shadow-inner">
+                        <UploadCloud className="w-8 h-8" />
+                      </div>
+                      <h3 className="text-base font-black text-slate-900 mb-1">
+                        Arrastre y suelte su archivo aquí o haga clic para buscar
+                      </h3>
+                      <p className="text-xs text-slate-500 max-w-xl mb-4 leading-relaxed">
+                        Detecta automáticamente hojas de <strong>Calendario Anual (12 Meses, Semanas y Días)</strong>, <strong>Bimestres</strong> y <strong>Módulos Curriculares</strong> desde Excel, Word o PDF.
+                      </p>
+
+                      <div className="flex flex-wrap items-center justify-center gap-2 mb-4">
+                        <span className="px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-bold">
+                          Excel (.xlsx, .xls)
+                        </span>
+                        <span className="px-2.5 py-1 rounded-md bg-blue-50 text-blue-800 border border-blue-200 text-[11px] font-bold">
+                          Word (.docx, .doc)
+                        </span>
+                        <span className="px-2.5 py-1 rounded-md bg-red-50 text-red-800 border border-red-200 text-[11px] font-bold">
+                          PDF (.pdf)
+                        </span>
+                      </div>
+
+                      <span className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs inline-flex items-center gap-2 shadow-xs transition-all">
+                        <UploadCloud className="w-4 h-4" />
+                        <span>Seleccionar Archivo de su Computadora</span>
+                      </span>
+                    </>
+                  )}
                 </div>
-              ) : (
-                <>
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-12 h-12 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shadow-xs font-bold text-xs">
-                      PDF
-                    </div>
-                    <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-xs font-bold text-xs">
-                      XLSX
-                    </div>
-                    <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center shadow-xs font-bold text-xs">
-                      JSON
-                    </div>
-                  </div>
+              </div>
+            )}
 
-                  <h3 className="text-base font-bold text-slate-800 mb-1">
-                    Arrastre su documento PDF o Excel aquí, o haga clic para seleccionar
+            {/* Sub-Tab 2: Paste Copied Text or Table */}
+            {method1Source === 'pegar_texto' && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                    <Clipboard className="w-4 h-4 text-blue-600" />
+                    <span>Pegar Texto o Tabla Copiada</span>
                   </h3>
-                  <p className="text-xs text-slate-500 max-w-md mb-4 leading-relaxed">
-                    El motor inteligente identificará automáticamente módulos, semanas, horas y periodos institucionales.
-                  </p>
-
-                  <span className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs inline-flex items-center gap-2 shadow-xs transition-all">
-                    <UploadCloud className="w-4 h-4" />
-                    <span>Examinar Archivos en su Equipo</span>
+                  <span className="text-xs text-slate-500">Word, PDF, Web o Excel</span>
+                </div>
+                <textarea
+                  rows={6}
+                  value={rawPastedText}
+                  onChange={(e) => setRawPastedText(e.target.value)}
+                  placeholder={`Ejemplo de texto o tabla copiada:\n\nDocente: Lic. Mario Gómez\nInstitución: Colegio Salesiano San José\nGrado: 2° Año Diseño Gráfico\n\nEnero: 2 semanas, 10 días\nFebrero: 4 semanas, 18 días\n\nMódulo 1: Elaboración de bocetos y prototipos (90 horas)\nMódulo 2: Edición digital de imágenes y vectores (90 horas)\nMódulo 3: Maquetación y diseño editorial (90 horas)\nMódulo 4: Proyecto integrador de identidad visual (90 horas)`}
+                  className="w-full p-3 font-sans text-xs text-slate-800 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500/20 outline-hidden resize-y"
+                />
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-slate-500">
+                    {rawPastedText.length} caracteres escritos
                   </span>
-                </>
-              )}
-            </div>
+                  <button
+                    onClick={handleProcessPastedText}
+                    disabled={!rawPastedText.trim() || isLoading}
+                    className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-xs"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>Analizar y Extraer Módulos y Calendario</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
-            {/* Parsed Preview Card */}
-            {parsedResult && (
-              <div className="bg-white rounded-2xl border-2 border-emerald-500/80 p-5 shadow-md space-y-4 animate-in fade-in">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+            {/* Sub-Tab 3: Paste JSON */}
+            {method1Source === 'json' && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <FileCode className="w-4 h-4 text-indigo-600" />
+                  <span>Pegar Respaldo JSON Completo</span>
+                </h3>
+                <textarea
+                  rows={6}
+                  value={jsonText}
+                  onChange={(e) => setJsonText(e.target.value)}
+                  placeholder='{ "headerData": { ... }, "modules": [ ... ], "months": [ ... ] }'
+                  className="w-full p-3 font-mono text-xs text-slate-800 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white outline-hidden resize-y"
+                />
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleApplyPastedJson}
+                    disabled={!jsonText.trim()}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs"
+                  >
+                    <span>Analizar JSON</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* INTERACTIVE EDITABLE PREVIEW OF RECOGNIZED DATA */}
+            {(parsedResult || editableModules.length > 0) && (
+              <div className="bg-white rounded-2xl border-2 border-blue-500/80 p-5 sm:p-7 shadow-lg space-y-5 animate-in fade-in w-full">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-black text-sm uppercase">
-                      {parsedResult.fileType}
+                    <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-800 flex items-center justify-center font-black text-sm uppercase shadow-xs">
+                      {parsedResult?.fileType || 'DATA'}
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                        <span>{parsedResult.fileName}</span>
-                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold uppercase">
-                          Estructura Identificada
+                      <h3 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2 flex-wrap">
+                        <span>{parsedResult?.fileName || 'Datos Reconocidos'}</span>
+                        <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold uppercase">
+                          {editableModules.length} Módulos · {editableMonths.length} Meses
                         </span>
                       </h3>
                       <p className="text-xs text-slate-500">
-                        {parsedResult.summary.modulesCount} Módulos · {parsedResult.summary.totalHours} Horas · {parsedResult.summary.detectedFields.join(', ')}
+                        {editableModules.reduce((a, b) => a + (Number(b.totalHoras) || 0), 0)} Horas Totales · {previewTotalSemanas} Semanas · {previewTotalDias} Días Hábiles
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setParsedResult(null)}
+                      onClick={() => {
+                        setParsedResult(null);
+                        setEditableModules([]);
+                      }}
                       className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 text-xs transition-all"
-                      title="Descartar archivo"
+                      title="Descartar vista previa"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
                     <button
+                      id="btn-aplicar-datos-reconocidos"
                       onClick={handleApplyParsedData}
-                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-all"
+                      className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-md transition-all"
                     >
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>Aplicar al Sistema</span>
+                      <span>Aplicar Todo al Sistema</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Preview Tabs */}
-                <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
+                {/* Preview Tabs: Modules, Calendar, Periods, Header */}
+                <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
                   <button
                     onClick={() => setActivePreviewTab('modulos')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      activePreviewTab === 'modulos' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                      activePreviewTab === 'modulos'
+                        ? 'bg-blue-100 text-blue-800 shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    Módulos ({parsedResult.modules?.length || 0})
+                    <BookOpen className="w-4 h-4" />
+                    <span>Módulos Curriculares ({editableModules.length})</span>
                   </button>
+
                   <button
                     onClick={() => setActivePreviewTab('calendario')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      activePreviewTab === 'calendario' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                      activePreviewTab === 'calendario'
+                        ? 'bg-purple-100 text-purple-800 shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    Calendario Institucional ({parsedResult.months?.length || months.length} Meses)
+                    <CalendarDays className="w-4 h-4" />
+                    <span>Calendario Anual ({previewTotalSemanas} sem · {previewTotalDias} días)</span>
                   </button>
+
                   <button
                     onClick={() => setActivePreviewTab('periodos')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      activePreviewTab === 'periodos' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                      activePreviewTab === 'periodos'
+                        ? 'bg-teal-100 text-teal-800 shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    Bimestres y Evaluaciones
-                  </button>
-                  <button
-                    onClick={() => setActivePreviewTab('encabezado')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      activePreviewTab === 'encabezado' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    Encabezado
+                    <Clock className="w-4 h-4" />
+                    <span>Bimestres y Fechas TBox</span>
                   </button>
                 </div>
 
-                {/* Tab Content */}
+                {/* TAB 1: EDITABLE MODULES TABLE */}
                 {activePreviewTab === 'modulos' && (
-                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                    {parsedResult.modules && parsedResult.modules.length > 0 ? (
-                      parsedResult.modules.map((m, idx) => (
-                        <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
-                          <div className="flex items-center gap-2.5">
-                            <span className="font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">{m.codigo}</span>
-                            <span className="font-semibold text-slate-800">{m.nombre}</span>
-                          </div>
-                          <div className="flex items-center gap-3 shrink-0">
-                            <span className="font-bold text-slate-700">{m.totalHoras} hrs</span>
-                            <span className="text-slate-500">({m.semanas} sem)</span>
-                          </div>
+                  <div className="space-y-3">
+                    {parsedResult && (!parsedResult.modules || parsedResult.modules.length === 0) && (
+                      <div className="p-3.5 bg-blue-50/90 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-3">
+                        <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                        <div className="space-y-1">
+                          <span className="font-bold block">Documento de Calendario Escolar Reconocido</span>
+                          <p className="text-[11px] text-blue-800 leading-relaxed">
+                            Se detectaron las <strong>{previewTotalSemanas} semanas</strong> y <strong>{previewTotalDias} días hábiles</strong> del año escolar. Se mantienen los <strong>{editableModules.length} módulos curriculares oficiales</strong> de este grado y sus fechas probables de inicio y fin han sido adaptadas automáticamente a este calendario.
+                          </p>
                         </div>
-                      ))
-                    ) : (
-                      <div className="p-4 rounded-xl bg-amber-50 text-amber-800 text-xs">
-                        No se detectaron módulos con formato estándar. Puede usar el Método 2 (Plantilla) o Método 3 (Formulario).
                       </div>
                     )}
+
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        Módulos Curriculares ({editableModules.length}):
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {onRestoreOfficialModules && (
+                          <button
+                            onClick={onRestoreOfficialModules}
+                            className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold flex items-center gap-1.5 border border-indigo-200 transition-colors"
+                            title="Restaurar los 27 módulos oficiales de Bachillerato en Diseño Gráfico"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Restaurar 27 Módulos MINED</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={handleAddEditableModule}
+                          className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-bold flex items-center gap-1.5 border border-blue-200 transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Agregar Fila</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                      {editableModules.map((m, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="flex items-center gap-2 flex-1 w-full">
+                            <input
+                              type="text"
+                              value={m.codigo}
+                              onChange={(e) => handleUpdateEditableModule(idx, 'codigo', e.target.value)}
+                              className="w-28 px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-blue-700 text-xs"
+                              placeholder="Código"
+                            />
+                            <input
+                              type="text"
+                              value={m.nombre}
+                              onChange={(e) => handleUpdateEditableModule(idx, 'nombre', e.target.value)}
+                              className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg font-semibold text-slate-800 text-xs"
+                              placeholder="Nombre del Módulo"
+                            />
+                          </div>
+                          <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                value={m.totalHoras}
+                                onChange={(e) => handleUpdateEditableModule(idx, 'totalHoras', Number(e.target.value))}
+                                className="w-20 px-2 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs text-right"
+                              />
+                              <span className="text-slate-500 font-bold">hrs</span>
+                            </div>
+                            <span className="text-slate-600 font-medium whitespace-nowrap">({m.semanas} sem)</span>
+                            <button
+                              onClick={() => handleDeleteEditableModule(idx)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Eliminar fila"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
+                {/* TAB 2: EDITABLE ANNUAL CALENDAR MONTHS (SEMANAS Y DÍAS) */}
                 {activePreviewTab === 'calendario' && (
-                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1 text-xs">
-                    {(parsedResult.months || months).map((m, idx) => (
-                      <div key={idx} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
-                        <div>
-                          <strong className="font-bold text-slate-900">{m.name}:</strong>
-                          <span className="text-slate-600 ml-2">{m.feriadosDesc || 'Días hábiles regulares'}</span>
-                        </div>
-                        <div className="flex items-center gap-2 font-bold text-slate-700">
-                          <span>{m.semanas} sem</span>
-                          <span>·</span>
-                          <span>{m.dias} días</span>
-                        </div>
+                  <div className="space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        Semanas y Días Hábiles por Mes (12 Meses):
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-blue-700 bg-blue-50 px-3 py-1 rounded-lg border border-blue-200">
+                          Total: {previewTotalSemanas} Semanas
+                        </span>
+                        <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200">
+                          Total: {previewTotalDias} Días Hábiles
+                        </span>
                       </div>
-                    ))}
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-3.5">
+                      {editableMonths.map((m, idx) => (
+                        <div key={m.month} className="p-3 rounded-xl bg-slate-50/90 border border-slate-200 text-xs space-y-2 hover:border-purple-300 hover:bg-purple-50/20 transition-all shadow-2xs">
+                          <div className="font-bold text-slate-900 capitalize flex items-center justify-between border-b border-slate-200/80 pb-1.5">
+                            <span className="text-xs">{m.name}</span>
+                            <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded">#{idx + 1}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] text-slate-500 font-semibold block mb-0.5">Semanas:</label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={6}
+                                value={m.semanas}
+                                onChange={(e) => handleUpdateEditableMonth(idx, 'semanas', e.target.value)}
+                                className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-blue-700 text-xs text-center focus:ring-2 focus:ring-blue-400 outline-hidden"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-500 font-semibold block mb-0.5">Días:</label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={31}
+                                value={m.dias}
+                                onChange={(e) => handleUpdateEditableMonth(idx, 'dias', e.target.value)}
+                                className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-emerald-700 text-xs text-center focus:ring-2 focus:ring-emerald-400 outline-hidden"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
+                {/* TAB 3: ACADEMIC PERIODS / BIMESTRES */}
                 {activePreviewTab === 'periodos' && (
-                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1 text-xs">
-                    {academicPeriods2026.map((p, idx) => (
-                      <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-                        <div className="flex items-center justify-between font-bold text-slate-900">
-                          <span>{p.nombre} ({p.inicio} – {p.fin})</span>
-                          <span className="text-emerald-700">Boletas: {p.entregaBoletas || 'Por definir'}</span>
+                  <div className="space-y-3">
+                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                      Períodos Académicos / Bimestres y Cierre TBox:
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                      {editablePeriods.map((p, idx) => (
+                        <div key={idx} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-indigo-700">{p.nombre}</span>
+                            <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full font-bold">10 Semanas</span>
+                          </div>
+                          <div className="text-[11px] text-slate-600">
+                            <strong>Fechas:</strong> {p.inicio} al {p.fin}
+                          </div>
+                          <div className="text-[11px] text-slate-600">
+                            <strong>Subida Notas TBox:</strong> {p.ingresoTBoxFinal || 'Conforme a calendario'}
+                          </div>
                         </div>
-                        <div className="text-slate-600 text-[11px]">
-                          {p.actividades.map((a) => a.nombre).join(' · ')}
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
 
-                {activePreviewTab === 'encabezado' && (
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                      <span className="text-slate-500 block">Docente:</span>
-                      <strong className="text-slate-900 font-bold">{parsedResult.headerData?.docente || headerData.docente}</strong>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                      <span className="text-slate-500 block">Institución:</span>
-                      <strong className="text-slate-900 font-bold">{parsedResult.headerData?.institucion || headerData.institucion}</strong>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                      <span className="text-slate-500 block">Grado:</span>
-                      <strong className="text-slate-900 font-bold">{parsedResult.headerData?.gradoSeccion || headerData.gradoSeccion}</strong>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                      <span className="text-slate-500 block">Año Lectivo:</span>
-                      <strong className="text-slate-900 font-bold">{parsedResult.headerData?.anoLectivo || headerData.anoLectivo}</strong>
-                    </div>
-                  </div>
-                )}
+                <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                  <span className="font-semibold text-emerald-900 text-center sm:text-left">
+                    ✓ Todo listo. Al hacer clic en "Aplicar Todo al Sistema", las fechas de inicio, fin y semanas se calcularán automáticamente con el calendario.
+                  </span>
+                  <button
+                    onClick={handleApplyParsedData}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all shadow-md shrink-0 flex items-center gap-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Aplicar Todo Ahora</span>
+                  </button>
+                </div>
               </div>
             )}
 
-            {/* Paste JSON box */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
-                <FileCode className="w-4 h-4 text-indigo-600" />
-                <span>O pegar contenido JSON de respaldo</span>
-              </h3>
-              <textarea
-                rows={3}
-                value={jsonText}
-                onChange={(e) => setJsonText(e.target.value)}
-                placeholder='{ "headerData": { ... }, "modules": [ ... ], "months": [ ... ] }'
-                className="w-full p-3 font-mono text-xs text-slate-800 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white outline-hidden resize-y"
-              />
-              <div className="flex justify-end mt-3">
-                <button
-                  onClick={handleApplyPastedJson}
-                  disabled={!jsonText.trim()}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs"
-                >
-                  <span>Analizar Texto JSON</span>
-                </button>
-              </div>
-            </div>
-
           </div>
 
-          {/* Sidebar Status Info */}
-          <div className="space-y-6">
+          {/* Bottom Status Info and Downloads Row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
               <div className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
                 <span>Estado Actual en Memoria</span>
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span className={`w-2.5 h-2.5 rounded-full ${modules.length > 0 ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
               </div>
-              <div className="space-y-2 text-xs">
-                <div className="p-2.5 rounded-xl bg-slate-50 flex items-center justify-between">
-                  <span className="text-slate-500">Grado Activo:</span>
-                  <strong className="text-slate-900 font-bold">{headerData.gradoSeccion}</strong>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="p-2.5 rounded-xl bg-slate-50">
+                  <span className="text-slate-500 block text-[11px]">Grado Activo:</span>
+                  <strong className="text-slate-900 font-bold block truncate">{headerData.gradoSeccion}</strong>
                 </div>
-                <div className="p-2.5 rounded-xl bg-slate-50 flex items-center justify-between">
-                  <span className="text-slate-500">Semanas Totales:</span>
-                  <strong className="text-blue-700 font-bold">{totalSemanas} Semanas Lectivas</strong>
+                <div className="p-2.5 rounded-xl bg-slate-50">
+                  <span className="text-slate-500 block text-[11px]">Semanas:</span>
+                  <strong className="text-blue-700 font-bold block">{totalSemanas} Semanas</strong>
                 </div>
-                <div className="p-2.5 rounded-xl bg-slate-50 flex items-center justify-between">
-                  <span className="text-slate-500">Días Hábiles:</span>
-                  <strong className="text-emerald-700 font-bold">{totalDias} Días</strong>
+                <div className="p-2.5 rounded-xl bg-slate-50">
+                  <span className="text-slate-500 block text-[11px]">Días Hábiles:</span>
+                  <strong className="text-emerald-700 font-bold block">{totalDias} Días</strong>
                 </div>
-                <div className="p-2.5 rounded-xl bg-slate-50 flex items-center justify-between">
-                  <span className="text-slate-500">Módulos Registrados:</span>
-                  <strong className="text-indigo-700 font-bold">{modules.length} Módulos ({totalHoras}h)</strong>
+                <div className="p-2.5 rounded-xl bg-slate-50">
+                  <span className="text-slate-500 block text-[11px]">Módulos:</span>
+                  <strong className={`font-bold block ${modules.length > 0 ? 'text-indigo-700' : 'text-amber-700'}`}>
+                    {modules.length} Módulos ({totalHoras}h)
+                  </strong>
                 </div>
               </div>
+
+              {modules.length === 0 && onRestoreOfficialModules && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2 text-xs text-amber-900 animate-in fade-in">
+                  <span className="font-semibold">⚠️ 0 Módulos en memoria. Puede restaurar la malla curricular oficial completa de Diseño Gráfico.</span>
+                  <button
+                    onClick={onRestoreOfficialModules}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors shrink-0"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Cargar 27 Módulos Oficiales</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                 Descargar y Respaldar
               </h4>
-              <button
-                onClick={handleDownloadJsonBackup}
-                className="w-full py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs"
-              >
-                <Download className="w-4 h-4 text-blue-400" />
-                <span>Descargar Copia JSON</span>
-              </button>
-              <button
-                onClick={handleDownloadExcelTemplate}
-                className="w-full py-2.5 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs"
-              >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
-                <span>Descargar Excel Completo</span>
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  onClick={handleDownloadJsonBackup}
+                  className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs"
+                >
+                  <Download className="w-4 h-4 text-blue-400" />
+                  <span>Descargar Copia JSON</span>
+                </button>
+                <button
+                  onClick={handleDownloadExcelTemplate}
+                  className="py-2.5 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
+                  <span>Descargar Excel Completo</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -748,328 +1224,184 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
       {activeMethod === 'metodo2_plantilla' && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
-            
-            <div className="border-b border-slate-100 pb-5">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold uppercase mb-2">
-                <FileSpreadsheet className="w-3.5 h-3.5" />
-                <span>Descarga y Carga de Plantilla Oficial</span>
+            <div className="flex items-start gap-4">
+              <div className="p-3 rounded-2xl bg-emerald-100 text-emerald-800">
+                <FileSpreadsheet className="w-6 h-6" />
               </div>
-              <h2 className="text-xl font-bold text-slate-900">
-                Paso 1: Descargue la Plantilla Estructurada con el Formato Requerido
-              </h2>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-3xl">
-                La plantilla contiene 3 hojas preconfiguradas: <strong>Periodos y Evaluaciones</strong> (con fechas de corte y límites TBox), <strong>Calendario Mes a Mes</strong> (con semanas y días exactos) y <strong>Módulos Curriculares</strong>. Llénela o modifíquela y vuelva a subirla.
-              </p>
-            </div>
-
-            {/* Download Buttons Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              
-              <div className="p-5 rounded-2xl border-2 border-emerald-200 bg-emerald-50/50 flex flex-col justify-between space-y-4">
-                <div className="space-y-1.5">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black text-xs">
-                    XLSX
-                  </div>
-                  <h4 className="font-bold text-sm text-slate-900">Plantilla Excel Multi-Hoja</h4>
-                  <p className="text-xs text-slate-600">
-                    Incluye las 3 hojas con fórmulas, columnas de fechas, días, semanas y bimestres.
-                  </p>
-                </div>
-                <button
-                  onClick={handleDownloadExcelTemplate}
-                  className="w-full py-2.5 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-all"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Descargar Plantilla Excel (.xlsx)</span>
-                </button>
-              </div>
-
-              <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/80 flex flex-col justify-between space-y-4">
-                <div className="space-y-1.5">
-                  <div className="w-10 h-10 rounded-xl bg-slate-700 text-white flex items-center justify-center font-black text-xs">
-                    CSV
-                  </div>
-                  <h4 className="font-bold text-sm text-slate-900">Plantilla CSV de Módulos</h4>
-                  <p className="text-xs text-slate-600">
-                    Formato ligero de texto separado por comas para lista de módulos y horas.
-                  </p>
-                </div>
-                <button
-                  onClick={handleDownloadCsvTemplate}
-                  className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-all"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Descargar Módulos (.csv)</span>
-                </button>
-              </div>
-
-              <div className="p-5 rounded-2xl border border-indigo-200 bg-indigo-50/50 flex flex-col justify-between space-y-4">
-                <div className="space-y-1.5">
-                  <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-black text-xs">
-                    JSON
-                  </div>
-                  <h4 className="font-bold text-sm text-slate-900">Respaldo Estructurado JSON</h4>
-                  <p className="text-xs text-slate-600">
-                    Estructura de datos completa y directa para importar sin conversiones.
-                  </p>
-                </div>
-                <button
-                  onClick={handleDownloadJsonBackup}
-                  className="w-full py-2.5 px-3 rounded-xl bg-indigo-700 hover:bg-indigo-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-all"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Descargar Plantilla JSON</span>
-                </button>
-              </div>
-
-            </div>
-
-            {/* Upload Filled Template Zone */}
-            <div className="border-t border-slate-100 pt-6 space-y-4">
-              <h2 className="text-xl font-bold text-slate-900">
-                Paso 2: Suba su Plantilla Llena para Procesar
-              </h2>
-              <p className="text-xs text-slate-500">
-                Arrastre el archivo Excel o CSV que acaba de modificar para que el sistema actualice los cálculos de semanas y días.
-              </p>
-
-              <div
-                onDragEnter={handleDrag}
-                onDragLeave={handleDrag}
-                onDragOver={handleDrag}
-                onDrop={handleDrop}
-                onClick={() => templateInputRef.current?.click()}
-                className="border-2 border-dashed border-emerald-400 bg-emerald-50/30 hover:bg-emerald-50/60 rounded-2xl p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center"
-              >
-                <input
-                  ref={templateInputRef}
-                  type="file"
-                  accept=".xlsx,.xls,.csv,.json"
-                  onChange={handleFileInputChange}
-                  className="hidden"
-                />
-                <FileSpreadsheet className="w-10 h-10 text-emerald-600 mb-2" />
-                <h3 className="text-sm font-bold text-slate-800">
-                  Haga clic o arrastre aquí su archivo Excel (.xlsx) lleno
+              <div className="space-y-1 flex-1">
+                <h3 className="text-base font-black text-slate-900">
+                  Plantilla Oficial de Jornalización y Calendario 2026
                 </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Se importarán y recalcularán todas las 3 hojas automáticamente.
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Descargue la plantilla de Excel preconfigurada con las 3 hojas oficiales del MINED y Colegio Salesiano San José:
                 </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                    <strong className="text-indigo-700 block mb-1">Hoja 1: Periodos y Evaluaciones</strong>
+                    <span>4 Bimestres, fechas de inicio y fin, semanas y fechas límites para notas en TBox.</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                    <strong className="text-blue-700 block mb-1">Hoja 2: Calendario y Días Hábiles</strong>
+                    <span>Distribución de los 12 meses con semanas laborales, días lectivos y asuetos.</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                    <strong className="text-emerald-700 block mb-1">Hoja 3: Módulos Curriculares</strong>
+                    <span>Códigos, nombres, horas totales, horas semanales y competencias formativas.</span>
+                  </div>
+                </div>
               </div>
             </div>
 
+            <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
+              <button
+                onClick={handleDownloadExcelTemplate}
+                className="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-md transition-all"
+              >
+                <Download className="w-4 h-4" />
+                <span>Descargar Plantilla Oficial Excel (.xlsx)</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveMethod('metodo1_lector');
+                  setMethod1Source('archivo');
+                }}
+                className="px-5 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-2 transition-all"
+              >
+                <span>Subir Plantilla Diligenciada</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* METHOD 3: FORMULARIO INTERACTIVO / ASISTENTE WIZARD */}
+      {/* METHOD 3: INTERACTIVE WIZARD FORM */}
       {activeMethod === 'metodo3_formulario' && (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
-          
-          {/* Wizard Header Progress */}
-          <div className="border-b border-slate-100 pb-5">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <div>
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-bold uppercase">
-                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                  <span>Asistente de Configuración Curricular Paso a Paso</span>
-                </div>
-                <h2 className="text-xl font-bold text-slate-900 mt-1">
-                  Paso {wizardStep} de 4: {
-                    wizardStep === 1 ? 'Datos Institucionales y Docente' :
-                    wizardStep === 2 ? 'Calendario Mensual, Días Hábiles y Semanas' :
-                    wizardStep === 3 ? 'Períodos Bimestrales y Fechas de Evaluación' :
-                    wizardStep === 4 ? 'Módulos Curriculares y Distribución de Fechas' :
-                    'Auditoría y Confirmación Final'
-                  }
-                </h2>
-              </div>
-
-              {/* Wizard Step Indicator Pills */}
-              <div className="flex items-center gap-1.5 text-xs font-bold">
-                {[1, 2, 3, 4].map((step) => (
-                  <button
-                    key={step}
-                    onClick={() => setWizardStep(step as any)}
-                    className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${
-                      wizardStep === step
-                        ? 'bg-indigo-600 text-white shadow-xs'
-                        : wizardStep > step
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                    }`}
-                  >
-                    {step}
-                  </button>
-                ))}
-              </div>
+          <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+            <div>
+              <span className="text-xs font-black uppercase tracking-wider text-indigo-600">Paso {wizardStep} de 3</span>
+              <h3 className="text-base font-black text-slate-900">
+                {wizardStep === 1 && '1. Datos de Institución y Grado'}
+                {wizardStep === 2 && '2. Calendario de Semanas y Días Hábiles'}
+                {wizardStep === 3 && '3. Lista de Módulos Curriculares y Horas'}
+              </h3>
             </div>
 
-            {/* Live Indicator Ribbon */}
-            <div className="grid grid-cols-3 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
-              <div>
-                <span className="text-slate-500 block">Semanas Calculadas:</span>
-                <strong className={`text-sm font-bold ${wizardTotalSemanas === 40 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {wizardTotalSemanas} Semanas {wizardTotalSemanas === 40 ? '(Exacto 40 sem)' : ''}
-                </strong>
-              </div>
-              <div>
-                <span className="text-slate-500 block">Días Hábiles:</span>
-                <strong className="text-sm font-bold text-indigo-700">
-                  {wizardTotalDias} Días Lectivos
-                </strong>
-              </div>
-              <div>
-                <span className="text-slate-500 block">Horas Totales:</span>
-                <strong className="text-sm font-bold text-blue-700">
-                  {wizardTotalHoras} Horas ({wizardModules.length} Módulos)
-                </strong>
-              </div>
+            <div className="flex items-center gap-2">
+              {wizardStep > 1 && (
+                <button
+                  onClick={() => setWizardStep((prev) => (prev - 1) as any)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+                >
+                  Anterior
+                </button>
+              )}
+              {wizardStep < 3 ? (
+                <button
+                  onClick={() => setWizardStep((prev) => (prev + 1) as any)}
+                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"
+                >
+                  <span>Siguiente</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              ) : (
+                <button
+                  onClick={handleWizardApplyAll}
+                  className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 shadow-md"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Guardar y Aplicar Todo</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* STEP 1: Datos Institucionales */}
+          {/* STEP 1: Institutional Header */}
           {wizardStep === 1 && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Nombre de la Institución:</label>
-                  <input
-                    type="text"
-                    value={wizardHeader.institucion}
-                    onChange={(e) => setWizardHeader({ ...wizardHeader, institucion: e.target.value })}
-                    className="w-full p-2.5 border border-slate-300 rounded-xl bg-white focus:border-indigo-500"
-                  />
-                </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Nombre de la Institución:</label>
+                <input
+                  type="text"
+                  value={wizardHeader.institucion}
+                  onChange={(e) => setWizardHeader({ ...wizardHeader, institucion: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium"
+                />
+              </div>
 
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Docente Responsable:</label>
-                  <input
-                    type="text"
-                    value={wizardHeader.docente}
-                    onChange={(e) => setWizardHeader({ ...wizardHeader, docente: e.target.value })}
-                    className="w-full p-2.5 border border-slate-300 rounded-xl bg-white focus:border-indigo-500"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Docente Responsable:</label>
+                <input
+                  type="text"
+                  value={wizardHeader.docente}
+                  onChange={(e) => setWizardHeader({ ...wizardHeader, docente: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium"
+                />
+              </div>
 
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Grado y Sección:</label>
-                  <input
-                    type="text"
-                    value={wizardHeader.gradoSeccion}
-                    onChange={(e) => setWizardHeader({ ...wizardHeader, gradoSeccion: e.target.value })}
-                    className="w-full p-2.5 border border-slate-300 rounded-xl bg-white focus:border-indigo-500"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Grado y Sección:</label>
+                <input
+                  type="text"
+                  value={wizardHeader.gradoSeccion}
+                  onChange={(e) => setWizardHeader({ ...wizardHeader, gradoSeccion: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium"
+                />
+              </div>
 
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Horas Semanales del Módulo:</label>
-                  <input
-                    type="number"
-                    value={wizardHeader.horasSemanalesModulo}
-                    onChange={(e) => setWizardHeader({ ...wizardHeader, horasSemanalesModulo: Number(e.target.value) || 18 })}
-                    className="w-full p-2.5 border border-slate-300 rounded-xl bg-white focus:border-indigo-500"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Año Lectivo:</label>
+                <input
+                  type="text"
+                  value={wizardHeader.anoLectivo}
+                  onChange={(e) => setWizardHeader({ ...wizardHeader, anoLectivo: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium"
+                />
               </div>
             </div>
           )}
 
-          {/* STEP 2: Conteo de Semanas y Días por Mes */}
+          {/* STEP 2: Calendar Months */}
           {wizardStep === 2 && (
-            <div className="space-y-4">
-              <p className="text-xs text-slate-600">
-                Ajuste el número de semanas laborales y días lectivos de cada mes según el calendario escolar. El sistema calculará el total en tiempo real.
-              </p>
-
-              <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                <table className="w-full text-xs text-left">
-                  <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                    <tr>
-                      <th className="p-2.5">Mes</th>
-                      <th className="p-2.5 w-28">Semanas</th>
-                      <th className="p-2.5 w-28">Días Hábiles</th>
-                      <th className="p-2.5">Descansos, Pausas y Feriados</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {wizardMonths.map((m, idx) => (
-                      <tr key={m.month} className="hover:bg-slate-50">
-                        <td className="p-2.5 font-bold text-slate-900 capitalize">{m.name}</td>
-                        <td className="p-2.5">
-                          <input
-                            type="number"
-                            min={0}
-                            max={6}
-                            value={m.semanas}
-                            onChange={(e) => {
-                              const copy = [...wizardMonths];
-                              copy[idx].semanas = Number(e.target.value) || 0;
-                              setWizardMonths(copy);
-                            }}
-                            className="w-20 p-1.5 border border-slate-300 rounded-lg text-center font-bold text-blue-700"
-                          />
-                        </td>
-                        <td className="p-2.5">
-                          <input
-                            type="number"
-                            min={0}
-                            max={31}
-                            value={m.dias}
-                            onChange={(e) => {
-                              const copy = [...wizardMonths];
-                              copy[idx].dias = Number(e.target.value) || 0;
-                              setWizardMonths(copy);
-                            }}
-                            className="w-20 p-1.5 border border-slate-300 rounded-lg text-center font-bold text-emerald-700"
-                          />
-                        </td>
-                        <td className="p-2.5">
-                          <input
-                            type="text"
-                            value={m.feriadosDesc}
-                            onChange={(e) => {
-                              const copy = [...wizardMonths];
-                              copy[idx].feriadosDesc = e.target.value;
-                              setWizardMonths(copy);
-                            }}
-                            className="w-full p-1.5 border border-slate-300 rounded-lg text-slate-700"
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-700">Ajuste de Semanas y Días por Mes:</span>
+                <span className="text-blue-700 font-bold">
+                  Total: {wizardMonths.reduce((a, b) => a + (Number(b.semanas) || 0), 0)} Semanas · {wizardMonths.reduce((a, b) => a + (Number(b.dias) || 0), 0)} Días
+                </span>
               </div>
-            </div>
-          )}
-
-          {/* STEP 3: Bimestres y Evaluaciones */}
-          {wizardStep === 3 && (
-            <div className="space-y-4">
-              <p className="text-xs text-slate-600">
-                Los 4 períodos bimestrales oficiales del año 2026 con sus respectivas fechas de corte, ingreso a TBox y entregas de boletas.
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {academicPeriods2026.map((p, idx) => (
-                  <div key={idx} className="p-4 rounded-xl border border-slate-200 bg-slate-50/80 space-y-2 text-xs">
-                    <div className="flex items-center justify-between font-bold text-slate-900 border-b border-slate-200 pb-2">
-                      <span className="text-indigo-700">{p.nombre}</span>
-                      <span>{p.inicio} – {p.fin}</span>
-                    </div>
-                    <div className="space-y-1 pt-1">
-                      <div className="flex justify-between text-slate-600">
-                        <span>Entrega de Temarios:</span>
-                        <strong className="text-slate-800">{p.entregaTemarios || '------------'}</strong>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
+                {wizardMonths.map((m, idx) => (
+                  <div key={m.month} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                    <div className="font-bold text-slate-900 capitalize">{m.name}</div>
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <span className="text-[10px] text-slate-500 font-semibold">Sem:</span>
+                        <input
+                          type="number"
+                          value={m.semanas}
+                          onChange={(e) => {
+                            const next = [...wizardMonths];
+                            next[idx].semanas = Number(e.target.value) || 0;
+                            setWizardMonths(next);
+                          }}
+                          className="w-full p-1 bg-white border border-slate-300 rounded text-center font-bold text-blue-700"
+                        />
                       </div>
-                      <div className="flex justify-between text-slate-600">
-                        <span>Recuperación Ordinaria:</span>
-                        <strong className="text-slate-800">{p.recuperacionOrdinaria || '------------'}</strong>
-                      </div>
-                      <div className="flex justify-between text-slate-600">
-                        <span>Entrega de Boletas:</span>
-                        <strong className="text-emerald-700">{p.entregaBoletas || '------------'}</strong>
+                      <div>
+                        <span className="text-[10px] text-slate-500 font-semibold">Días:</span>
+                        <input
+                          type="number"
+                          value={m.dias}
+                          onChange={(e) => {
+                            const next = [...wizardMonths];
+                            next[idx].dias = Number(e.target.value) || 0;
+                            setWizardMonths(next);
+                          }}
+                          className="w-full p-1 bg-white border border-slate-300 rounded text-center font-bold text-emerald-700"
+                        />
                       </div>
                     </div>
                   </div>
@@ -1078,79 +1410,62 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
             </div>
           )}
 
-          {/* STEP 4: Módulos Curriculares y Distribución */}
-          {wizardStep === 4 && (
+          {/* STEP 3: Modules List */}
+          {wizardStep === 3 && (
             <div className="space-y-4">
-              <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-xs flex items-center justify-between">
-                <span>
-                  Agregue o edite los módulos. El sistema calculará matemáticamente la fecha de inicio, fin y semanas sin dejar huecos ni saltarse días.
-                </span>
-              </div>
-
-              {/* Add module row */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs p-3 bg-slate-50 rounded-xl border border-slate-200">
-                <div>
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <h4 className="text-xs font-bold text-slate-900 uppercase">Agregar Módulo Curricular</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs">
                   <input
                     type="text"
-                    placeholder="Código (ej. BTVDG2.1)"
                     value={newModuleCode}
                     onChange={(e) => setNewModuleCode(e.target.value)}
-                    className="w-full p-2 border border-slate-300 rounded-lg bg-white"
+                    placeholder="Código (ej. BTVDG2.1)"
+                    className="p-2 bg-white border border-slate-300 rounded-lg"
                   />
-                </div>
-                <div className="sm:col-span-2">
                   <input
                     type="text"
-                    placeholder="Nombre del Módulo Curricular"
                     value={newModuleName}
                     onChange={(e) => setNewModuleName(e.target.value)}
-                    className="w-full p-2 border border-slate-300 rounded-lg bg-white"
+                    placeholder="Nombre del Módulo"
+                    className="sm:col-span-2 p-2 bg-white border border-slate-300 rounded-lg"
                   />
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    placeholder="Horas"
-                    value={newModuleHours}
-                    onChange={(e) => setNewModuleHours(Number(e.target.value) || 90)}
-                    className="w-20 p-2 border border-slate-300 rounded-lg bg-white"
-                  />
-                  <button
-                    onClick={handleWizardAddModule}
-                    className="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg flex items-center justify-center gap-1"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Agregar</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={newModuleHours}
+                      onChange={(e) => setNewModuleHours(Number(e.target.value))}
+                      placeholder="Horas"
+                      className="w-20 p-2 bg-white border border-slate-300 rounded-lg text-center"
+                    />
+                    <button
+                      onClick={handleWizardAddModule}
+                      className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg"
+                    >
+                      Agregar
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              {/* Modules list */}
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-slate-700 uppercase">
+                  Módulos Registrados ({wizardModules.length}):
+                </h4>
                 {wizardModules.map((m, idx) => (
-                  <div key={m.codigo} className="p-3 rounded-xl border border-slate-200 bg-white flex items-center justify-between text-xs hover:border-slate-300">
+                  <div key={idx} className="p-3 bg-white rounded-xl border border-slate-200 flex items-center justify-between text-xs">
                     <div className="flex items-center gap-3">
-                      <span className="font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
-                        {m.codigo}
-                      </span>
-                      <div>
-                        <strong className="text-slate-900 block">{m.nombre}</strong>
-                        <span className="text-slate-500 text-[11px]">
-                          {m.fechaInicio} al {m.fechaFin} ({m.semanas} semanas)
-                        </span>
-                      </div>
+                      <span className="font-bold text-blue-700">{m.codigo}</span>
+                      <span className="font-semibold text-slate-800">{m.nombre}</span>
                     </div>
-
                     <div className="flex items-center gap-3">
-                      <span className="font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded">
-                        {m.totalHoras} hrs
-                      </span>
+                      <span className="font-bold text-slate-700">{m.totalHoras} hrs</span>
+                      <span className="text-slate-500">({m.semanas} sem)</span>
                       <button
                         onClick={() => handleWizardRemoveModule(m.codigo)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"
-                        title="Eliminar módulo"
+                        className="text-red-500 hover:text-red-700"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
@@ -1158,37 +1473,6 @@ export const UploadDocumentView: React.FC<UploadDocumentViewProps> = ({
               </div>
             </div>
           )}
-
-          {/* Navigation Controls */}
-          <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-            {wizardStep > 1 ? (
-              <button
-                onClick={() => setWizardStep((prev) => (prev - 1) as any)}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                <span>Paso Anterior</span>
-              </button>
-            ) : <div />}
-
-            {wizardStep < 4 ? (
-              <button
-                onClick={() => setWizardStep((prev) => (prev + 1) as any)}
-                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs"
-              >
-                <span>Siguiente Paso</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            ) : (
-              <button
-                onClick={handleWizardApplyAll}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 transition-all shadow-md"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Auditar y Aplicar Todo a la Jornalización</span>
-              </button>
-            )}
-          </div>
 
         </div>
       )}

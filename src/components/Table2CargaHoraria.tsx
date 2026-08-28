@@ -40,7 +40,7 @@ export const Table2CargaHoraria: React.FC<Table2Props> = ({
 
     if (field === 'duracionHoras') {
       item.totalHoras = Number(val) || 0;
-      item.horasPorUnidad = { ...item.horasPorUnidad, u1: Number(val) || 0 };
+      item.horasPorUnidad = { ...(item.horasPorUnidad || { u1: Number(val) || 0 }), u1: Number(val) || 0 };
     }
 
     updated[index] = item;
@@ -116,14 +116,22 @@ export const Table2CargaHoraria: React.FC<Table2Props> = ({
             </tr>
           </thead>
           <tbody>
-            {modules.map((m, idx) => (
-              <tr
-                key={m.codigo}
-                onClick={() => onSelectModule && onSelectModule(m)}
-                className={`border-b border-slate-200 transition-colors cursor-pointer ${
-                  idx % 2 === 0 ? 'bg-white hover:bg-indigo-50/40' : 'bg-slate-50/40 hover:bg-indigo-50/40'
-                }`}
-              >
+            {modules.length === 0 ? (
+              <tr>
+                <td colSpan={13} className="py-8 text-center text-slate-500 text-xs">
+                  <p className="font-bold text-slate-700">No hay módulos registrados en este grado (memoria en blanco)</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Diríjase a "Subir / Cargar Doc." para subir su archivo Word, Excel o PDF, o restablezca los valores oficiales.</p>
+                </td>
+              </tr>
+            ) : (
+              modules.map((m, idx) => (
+                <tr
+                  key={m.codigo}
+                  onClick={() => onSelectModule && onSelectModule(m)}
+                  className={`border-b border-slate-200 transition-colors cursor-pointer ${
+                    idx % 2 === 0 ? 'bg-white hover:bg-indigo-50/40' : 'bg-slate-50/40 hover:bg-indigo-50/40'
+                  }`}
+                >
                 <td className="py-2.5 px-3 text-left font-bold text-slate-900 border-r border-slate-200 flex items-center justify-between gap-1.5">
                   <div className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
@@ -229,16 +237,16 @@ export const Table2CargaHoraria: React.FC<Table2Props> = ({
 
                 {/* Unit 1 */}
                 <td className="py-2 px-2 border-r border-slate-200 text-slate-700 font-medium">
-                  {m.horasPorUnidad.u1}
+                  {m.horasPorUnidad?.u1 ?? m.duracionHoras ?? m.totalHoras ?? 0}
                 </td>
                 <td className="py-2 px-2 border-r border-slate-200 text-slate-400">
-                  {m.horasPorUnidad.u2 || '-'}
+                  {m.horasPorUnidad?.u2 || '-'}
                 </td>
                 <td className="py-2 px-2 border-r border-slate-200 text-slate-400">
-                  {m.horasPorUnidad.u3 || '-'}
+                  {m.horasPorUnidad?.u3 || '-'}
                 </td>
                 <td className="py-2 px-2 border-r border-slate-200 text-slate-400">
-                  {m.horasPorUnidad.u4 || '-'}
+                  {m.horasPorUnidad?.u4 || '-'}
                 </td>
 
                 {/* Total Horas */}
@@ -246,7 +254,7 @@ export const Table2CargaHoraria: React.FC<Table2Props> = ({
                   {m.totalHoras}
                 </td>
               </tr>
-            ))}
+            )))}
 
             {/* Total Row */}
             <tr className="bg-slate-100 font-bold text-slate-900 border-t-2 border-slate-300">

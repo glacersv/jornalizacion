@@ -100,14 +100,22 @@ export const Table4NominaModulos: React.FC<Table4Props> = ({
             </tr>
           </thead>
           <tbody>
-            {modules.map((m, idx) => (
-              <tr
-                key={m.codigo + idx}
-                onClick={() => onSelectModule && onSelectModule(m)}
-                className={`border-b border-slate-200 transition-colors cursor-pointer ${
-                  idx % 2 === 0 ? 'bg-white hover:bg-amber-50/40' : 'bg-slate-50/40 hover:bg-amber-50/40'
-                }`}
-              >
+            {modules.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-8 text-center text-slate-500 text-xs">
+                  <p className="font-bold text-slate-700">No hay módulos cargados para este grado</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Suba su archivo en "Subir / Cargar Doc." o haga clic en "Restablecer a Valores Oficiales".</p>
+                </td>
+              </tr>
+            ) : (
+              modules.map((m, idx) => (
+                <tr
+                  key={m.codigo + idx}
+                  onClick={() => onSelectModule && onSelectModule(m)}
+                  className={`border-b border-slate-200 transition-colors cursor-pointer ${
+                    idx % 2 === 0 ? 'bg-white hover:bg-amber-50/40' : 'bg-slate-50/40 hover:bg-amber-50/40'
+                  }`}
+                >
                 <td className="py-3 px-4 font-bold text-blue-700 border-r border-slate-200 whitespace-nowrap">
                   {isEditMode ? (
                     <input
@@ -172,7 +180,7 @@ export const Table4NominaModulos: React.FC<Table4Props> = ({
                   </div>
                 </td>
               </tr>
-            ))}
+            )))}
           </tbody>
         </table>
       </div>

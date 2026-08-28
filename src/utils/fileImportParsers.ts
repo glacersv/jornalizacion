@@ -1,16 +1,17 @@
 import * as XLSX from 'xlsx';
-import { InstitutionalHeader, ModuleDescriptor, MonthStats, AcademicPeriod, SuspensionEvent } from '../types';
-import { academicPeriods2026, monthsData2026, modulesData1stYear, modulesData2ndYear, modulesData3rdYear } from '../data/jornalizacionData';
+import mammoth from 'mammoth';
+import { InstitutionalHeader, ModuleDescriptor, MonthStats, AcademicPeriod } from '../types';
+import { academicPeriods2026, monthsData2026 } from '../data/jornalizacionData';
 
-// Set up pdfjs-dist
+// Set up pdfjs-dist safely with multiple fallback workers
 let pdfjsLib: any = null;
 
 async function getPdfJs() {
   if (!pdfjsLib) {
     pdfjsLib = await import('pdfjs-dist');
-    // Configure worker
     if (pdfjsLib.GlobalWorkerOptions) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '3.11.174'}/pdf.worker.min.mjs`;
+      const version = pdfjsLib.version || '4.0.379';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
     }
   }
   return pdfjsLib;
@@ -18,7 +19,7 @@ async function getPdfJs() {
 
 export interface ParsedDocumentResult {
   fileName: string;
-  fileType: 'pdf' | 'excel' | 'json' | 'manual' | 'unknown';
+  fileType: 'pdf' | 'excel' | 'word' | 'json' | 'text' | 'manual' | 'unknown';
   fileSize: number;
   rawText?: string;
   headerData?: Partial<InstitutionalHeader>;
@@ -36,35 +37,331 @@ export interface ParsedDocumentResult {
   };
 }
 
+export const SPANISH_MONTH_NAMES = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+];
+
+export const MONTH_DISPLAY_NAMES: { [key: string]: string } = {
+  enero: 'Enero',
+  febrero: 'Febrero',
+  marzo: 'Marzo',
+  abril: 'Abril',
+  mayo: 'Mayo',
+  junio: 'Junio',
+  julio: 'Julio',
+  agosto: 'Agosto',
+  septiembre: 'Septiembre',
+  setiembre: 'Septiembre',
+  octubre: 'Octubre',
+  noviembre: 'Noviembre',
+  diciembre: 'Diciembre',
+};
+
 /**
- * Parses a PDF file using pdfjs-dist in the browser and extracts structured curricular data and calendar.
+ * Normalizes text string for robust matching
  */
-export async function parsePdfFile(file: File): Promise<ParsedDocumentResult> {
-  const pdfjs = await getPdfJs();
-  const arrayBuffer = await file.arrayBuffer();
-  
-  const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
-  const pdfDoc = await loadingTask.promise;
-  
-  let fullText = '';
-  const numPages = pdfDoc.numPages;
-  
-  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    const page = await pdfDoc.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(' ');
-    fullText += `\n--- PÁGINA ${pageNum} ---\n` + pageText;
+function cleanText(str: any): string {
+  if (str == null) return '';
+  return String(str).trim();
+}
+
+/**
+ * Creates a clean 12-month array with all weeks and days set to 0 and empty descriptions
+ */
+export function createEmpty12Months(): MonthStats[] {
+  return SPANISH_MONTH_NAMES.map((m) => ({
+    month: m,
+    name: MONTH_DISPLAY_NAMES[m] || m,
+    semanas: 0,
+    dias: 0,
+    feriadosDesc: '',
+    eventos: [],
+  }));
+}
+
+/**
+ * Creates a clean 12-month array populated from a standard baseline or default 2026 data
+ */
+export function createDefault12Months(): MonthStats[] {
+  return JSON.parse(JSON.stringify(monthsData2026));
+}
+
+/**
+ * Scans a 2D grid/table (from Excel) for a Horizontal Month Distribution:
+ * Row 1: [Meses, Enero, Febrero, Marzo, Abril, Mayo, Junio, Julio, Agosto, Septiembre, Octubre, Noviembre, Diciembre]
+ * Row 2: [Semanas, 2, 4, 4, 4, 4, 4, 5, 4, 4, 3, 2, 0]
+ * Row 3: [Días, 10, 18, 19, 18, 19, 20, 21, 17, 21, 12, 5, 0]
+ */
+export function extractHorizontalMonthsFromGrid(rows: any[][]): MonthStats[] | null {
+  if (!rows || rows.length < 2) return null;
+
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.length < 4) continue;
+
+    // Check if this row contains multiple month names
+    const monthPositions: { col: number; monthKey: string; name: string }[] = [];
+    row.forEach((cell, cIdx) => {
+      const txt = cleanText(cell).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const matchedMonth = SPANISH_MONTH_NAMES.find((m) => txt === m || (txt.length >= 3 && m.startsWith(txt)));
+      if (matchedMonth) {
+        monthPositions.push({
+          col: cIdx,
+          monthKey: matchedMonth,
+          name: MONTH_DISPLAY_NAMES[matchedMonth] || matchedMonth,
+        });
+      }
+    });
+
+    // If at least 4 months are detected across columns in this row
+    if (monthPositions.length >= 4) {
+      let semanasRowIdx = -1;
+      let diasRowIdx = -1;
+      let feriadosRowIdx = -1;
+
+      for (let nextR = r + 1; nextR < Math.min(rows.length, r + 6); nextR++) {
+        const checkRow = rows[nextR];
+        if (!checkRow || checkRow.length === 0) continue;
+        const firstFew = checkRow.slice(0, 3).map((c) => cleanText(c).toLowerCase()).join(' ');
+
+        if (firstFew.includes('semana') || firstFew.includes('sem')) {
+          semanasRowIdx = nextR;
+        } else if (firstFew.includes('dia') || firstFew.includes('días') || firstFew.includes('habiles') || firstFew.includes('lectivos')) {
+          diasRowIdx = nextR;
+        } else if (firstFew.includes('feriado') || firstFew.includes('suspensi') || firstFew.includes('observaci') || firstFew.includes('pausa')) {
+          feriadosRowIdx = nextR;
+        }
+      }
+
+      // If neither row had an explicit label, check if next row has numbers <= 6 (weeks) and row after has numbers > 6 (days)
+      if (semanasRowIdx === -1 && diasRowIdx === -1 && rows[r + 1]) {
+        const sampleNumbers = monthPositions.map(({ col }) => Number(rows[r + 1][col])).filter((n) => !isNaN(n));
+        if (sampleNumbers.length >= 3) {
+          const allSmall = sampleNumbers.every((n) => n >= 0 && n <= 6);
+          if (allSmall) {
+            semanasRowIdx = r + 1;
+            if (rows[r + 2]) {
+              diasRowIdx = r + 2;
+            }
+          } else {
+            diasRowIdx = r + 1;
+          }
+        }
+      }
+
+      if (semanasRowIdx !== -1 || diasRowIdx !== -1) {
+        const resultMonths = createEmpty12Months();
+
+        monthPositions.forEach(({ col, monthKey }) => {
+          const mIdx = resultMonths.findIndex((rm) => rm.month === monthKey);
+          if (mIdx !== -1) {
+            if (semanasRowIdx !== -1 && rows[semanasRowIdx] && rows[semanasRowIdx][col] != null) {
+              const semVal = Number(rows[semanasRowIdx][col]);
+              if (!isNaN(semVal) && semVal >= 0 && semVal <= 6) {
+                resultMonths[mIdx].semanas = semVal;
+              }
+            }
+            if (diasRowIdx !== -1 && rows[diasRowIdx] && rows[diasRowIdx][col] != null) {
+              const diasVal = Number(rows[diasRowIdx][col]);
+              if (!isNaN(diasVal) && diasVal >= 0 && diasVal <= 31) {
+                resultMonths[mIdx].dias = diasVal;
+              }
+            }
+            if (feriadosRowIdx !== -1 && rows[feriadosRowIdx] && rows[feriadosRowIdx][col] != null) {
+              const desc = cleanText(rows[feriadosRowIdx][col]);
+              if (desc) {
+                resultMonths[mIdx].feriadosDesc = desc;
+              }
+            }
+          }
+        });
+
+        // Ensure default holiday descriptions if blank
+        resultMonths.forEach((rm, idx) => {
+          if (!rm.feriadosDesc && monthsData2026[idx]?.feriadosDesc) {
+            rm.feriadosDesc = monthsData2026[idx].feriadosDesc;
+          }
+          rm.eventos = monthsData2026[idx]?.eventos || [];
+        });
+
+        return resultMonths;
+      }
+    }
   }
 
-  // Extract metadata, calendar periods, modules and entities from text
-  return analyzeExtractedText(file.name, file.size, fullText, 'pdf');
+  return null;
+}
+
+/**
+ * Scans a 2D grid/table for Vertical Month Distribution (Rows = Months):
+ * Enero | 2 | 10 | Asuetos...
+ * Febrero | 4 | 18 | ...
+ */
+export function extractVerticalMonthsFromGrid(rows: any[][]): MonthStats[] | null {
+  if (!rows || rows.length < 3) return null;
+
+  const foundMonths: { month: string; semanas: number; dias: number; desc: string }[] = [];
+
+  rows.forEach((row) => {
+    if (!row || row.length < 2) return;
+    const firstCell = cleanText(row[0]).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const matched = SPANISH_MONTH_NAMES.find((m) => firstCell === m || firstCell.startsWith(m));
+
+    if (matched) {
+      let sem = 0;
+      let dias = 0;
+      let desc = '';
+
+      for (let c = 1; c < row.length; c++) {
+        const val = row[c];
+        const num = Number(val);
+        if (!isNaN(num) && num >= 0 && num <= 6 && sem === 0) {
+          sem = num;
+        } else if (!isNaN(num) && num >= 0 && num <= 31 && dias === 0) {
+          dias = num;
+        } else if (typeof val === 'string' && val.trim().length > 3 && !desc) {
+          desc = val.trim();
+        }
+      }
+
+      foundMonths.push({
+        month: matched,
+        semanas: sem,
+        dias: dias,
+        desc,
+      });
+    }
+  });
+
+  if (foundMonths.length >= 3) {
+    const result = createEmpty12Months();
+    foundMonths.forEach((fm) => {
+      const idx = result.findIndex((rm) => rm.month === fm.month);
+      if (idx !== -1) {
+        result[idx].semanas = fm.semanas;
+        result[idx].dias = fm.dias;
+        if (fm.desc) result[idx].feriadosDesc = fm.desc;
+      }
+    });
+
+    result.forEach((rm, idx) => {
+      if (!rm.feriadosDesc && monthsData2026[idx]?.feriadosDesc) {
+        rm.feriadosDesc = monthsData2026[idx].feriadosDesc;
+      }
+      rm.eventos = monthsData2026[idx]?.eventos || [];
+    });
+
+    return result;
+  }
+
+  return null;
+}
+
+/**
+ * Extracts Academic Periods (Bimestres / Trimestres) with dates from text or table
+ */
+export function extractAcademicPeriodsFromText(text: string): AcademicPeriod[] | null {
+  if (!text) return null;
+
+  const periods: AcademicPeriod[] = [];
+  const periodRegex = /(?:Bimestre|Periodo|Trimestre)\s*([1-4]|I|II|III|IV)\b[:\s\-–\.]+(?:del?\s+)?([0-9]{1,2}\s+(?:de\s+)?[A-Za-z]+)\s+(?:al?|hasta|-|–)\s+([0-9]{1,2}\s+(?:de\s+)?[A-Za-z]+)(?:.*?TBox[:\s]+([^\n\r,\.]+))?/gi;
+
+  let match;
+  while ((match = periodRegex.exec(text)) !== null) {
+    const rawNum = match[1];
+    const inicio = match[2]?.trim();
+    const fin = match[3]?.trim();
+    const tbox = match[4]?.trim();
+
+    const numMap: { [key: string]: string } = { '1': 'I', '2': 'II', '3': 'III', '4': 'IV', i: 'I', ii: 'II', iii: 'III', iv: 'IV' };
+    const roman = numMap[rawNum.toLowerCase()] || rawNum;
+
+    periods.push({
+      nombre: `Bimestre ${roman}`,
+      inicio: inicio || 'Por definir',
+      fin: fin || 'Por definir',
+      tipo: 'Bimestre',
+      ingresoTBoxFinal: tbox || 'Conforme a calendario',
+      actividades: [],
+    });
+  }
+
+  if (periods.length >= 2) {
+    return periods;
+  }
+
+  return null;
+}
+
+/**
+ * Parses free text for month tables (e.g. "Enero: 2 semanas, 10 días", or tabular text lines)
+ */
+export function extractMonthsFromFreeText(text: string): MonthStats[] | null {
+  if (!text) return null;
+
+  const foundMonths: { month: string; semanas: number; dias: number; desc: string }[] = [];
+
+  // Pattern: "Enero: 2 semanas, 10 días" or "Enero | 2 | 10" or "Enero (2 sem, 10 d)"
+  SPANISH_MONTH_NAMES.forEach((mName) => {
+    const reg = new RegExp(
+      `(?:^|\\n|[\\|;,])\\s*${mName}\\b[^\\d\\n]*?(\\d{1,2})\\s*(?:sem|semanas|w)?[^\\d\\n]*?(\\d{1,2})\\s*(?:d[ií]as|d|days)?(?:[:\\-–\\|\\s]+([^\\n\\r]+))?`,
+      'i'
+    );
+    const m = text.match(reg);
+    if (m) {
+      const sem = parseInt(m[1], 10);
+      const dias = parseInt(m[2], 10);
+      const desc = m[3]?.trim() || '';
+
+      if (!isNaN(sem) && sem <= 6 && !isNaN(dias) && dias <= 31) {
+        foundMonths.push({
+          month: mName,
+          semanas: sem,
+          dias: dias,
+          desc: desc.length > 5 ? desc : '',
+        });
+      }
+    }
+  });
+
+  if (foundMonths.length >= 3) {
+    const result = createEmpty12Months();
+    foundMonths.forEach((fm) => {
+      const idx = result.findIndex((rm) => rm.month === fm.month);
+      if (idx !== -1) {
+        result[idx].semanas = fm.semanas;
+        result[idx].dias = fm.dias;
+        if (fm.desc) result[idx].feriadosDesc = fm.desc;
+      }
+    });
+
+    result.forEach((rm, idx) => {
+      if (!rm.feriadosDesc && monthsData2026[idx]?.feriadosDesc) {
+        rm.feriadosDesc = monthsData2026[idx].feriadosDesc;
+      }
+      rm.eventos = monthsData2026[idx]?.eventos || [];
+    });
+
+    return result;
+  }
+
+  return null;
 }
 
 /**
  * Parses an Excel (.xlsx, .xls, .csv) file using SheetJS (XLSX).
- * Handles both template formats and generic curricular spreadsheets.
+ * Uses multi-strategy column, cell, and horizontal/vertical grid recognizers.
  */
 export async function parseExcelFile(file: File): Promise<ParsedDocumentResult> {
   const arrayBuffer = await file.arrayBuffer();
@@ -72,75 +369,186 @@ export async function parseExcelFile(file: File): Promise<ParsedDocumentResult> 
   
   let allText = '';
   const detectedModules: ModuleDescriptor[] = [];
-  const detectedMonths: MonthStats[] = [];
+  let detectedMonths: MonthStats[] | null = null;
+  let detectedPeriods: AcademicPeriod[] | null = null;
   const detectedHeader: Partial<InstitutionalHeader> = {};
   const detectedFields: string[] = [];
 
   workbook.SheetNames.forEach((sheetName) => {
     const worksheet = workbook.Sheets[sheetName];
-    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' }) as any[][];
     
     allText += `\n--- HOJA: ${sheetName} ---\n`;
     
-    const lowerSheet = sheetName.toLowerCase();
+    if (!jsonData || jsonData.length === 0) return;
 
-    // Check if it's the Months/Calendar sheet
-    if (lowerSheet.includes('calendario') || lowerSheet.includes('mes') || lowerSheet.includes('fechas')) {
-      jsonData.forEach((row, idx) => {
-        if (idx === 0 || !row || row.length === 0) return;
-        const mesName = String(row[0] || '').trim();
-        const sem = Number(row[1]) || 4;
-        const dias = Number(row[2]) || 18;
-        const desc = String(row[3] || '').trim();
-        
-        if (mesName && mesName.length > 2) {
-          detectedMonths.push({
-            month: mesName.toLowerCase(),
-            name: mesName,
-            semanas: sem,
-            dias: dias,
-            feriadosDesc: desc,
-          });
-        }
-      });
-      if (detectedMonths.length > 0) {
-        detectedFields.push(`${detectedMonths.length} Meses de Calendario`);
+    // 1. Scan for Months (Horizontal & Vertical tables in this sheet)
+    if (!detectedMonths) {
+      detectedMonths = extractHorizontalMonthsFromGrid(jsonData) || extractVerticalMonthsFromGrid(jsonData);
+      if (detectedMonths) {
+        detectedFields.push(`12 Meses de Calendario Anual (Semanas y Días)`);
       }
     }
 
-    // Process all rows for modules and headers
-    jsonData.forEach((row) => {
-      if (!row || row.length === 0) return;
-      const rowStr = row.map((cell) => (cell != null ? String(cell).trim() : '')).join(' | ');
+    // 2. Scan for Periods / Bimestres in this sheet
+    if (!detectedPeriods) {
+      const sheetText = jsonData.map((r) => r.join(' ')).join('\n');
+      detectedPeriods = extractAcademicPeriodsFromText(sheetText);
+      if (detectedPeriods) {
+        detectedFields.push(`${detectedPeriods.length} Períodos Académicos / Bimestres`);
+      }
+    }
+
+    // 3. Find Column Header mapping (Header Row detection)
+    let headerRowIdx = -1;
+    let colMap = {
+      code: -1,
+      name: -1,
+      hours: -1,
+      weeks: -1,
+      hoursWeekly: -1,
+      units: -1,
+      competencies: -1,
+      indicators: -1,
+    };
+
+    for (let r = 0; r < Math.min(jsonData.length, 15); r++) {
+      const row = jsonData[r];
+      if (!row || row.length === 0) continue;
+      
+      const lowerCells = row.map((c) => cleanText(c).toLowerCase());
+      
+      const hasCode = lowerCells.some((c) => c.includes('código') || c.includes('codigo') || c.includes('n°') || c.includes('no.') || c.includes('modulo') || c.includes('módulo'));
+      const hasName = lowerCells.some((c) => c.includes('nombre') || c.includes('asignatura') || c.includes('unidad de') || c.includes('módulo') || c.includes('tema') || c.includes('competencia'));
+      const hasHours = lowerCells.some((c) => c.includes('hora') || c.includes('duraci') || c.includes('hrs') || c.includes('tiempo'));
+
+      if ((hasCode || hasName) && (hasHours || lowerCells.length >= 2)) {
+        headerRowIdx = r;
+        lowerCells.forEach((cell, colIdx) => {
+          if (colMap.code === -1 && (cell.includes('código') || cell.includes('codigo') || cell.includes('cód') || cell.includes('n°') || cell.includes('no.'))) {
+            colMap.code = colIdx;
+          }
+          if (colMap.name === -1 && (cell.includes('nombre') || cell.includes('módulo') || cell.includes('modulo') || cell.includes('asignatura') || cell.includes('unidad de aprendizaje') || cell.includes('descripci'))) {
+            colMap.name = colIdx;
+          }
+          if (colMap.hours === -1 && (cell.includes('total hora') || cell.includes('horas total') || cell.includes('duraci') || cell.includes('horas') || cell.includes('hrs'))) {
+            colMap.hours = colIdx;
+          }
+          if (colMap.weeks === -1 && (cell.includes('semana') || cell.includes('sem'))) {
+            colMap.weeks = colIdx;
+          }
+          if (colMap.hoursWeekly === -1 && (cell.includes('semanal') || cell.includes('h/s') || cell.includes('hrs/sem'))) {
+            colMap.hoursWeekly = colIdx;
+          }
+          if (colMap.units === -1 && (cell.includes('unidad') || cell.includes('unid'))) {
+            colMap.units = colIdx;
+          }
+          if (colMap.competencies === -1 && (cell.includes('competencia') || cell.includes('objetivo'))) {
+            colMap.competencies = colIdx;
+          }
+        });
+        break;
+      }
+    }
+
+    // Default column fallback if not labeled
+    if (colMap.code === -1 && colMap.name === -1) {
+      colMap.code = 0;
+      colMap.name = 1;
+      colMap.hours = 2;
+    } else if (colMap.code === -1) {
+      colMap.code = 0;
+    } else if (colMap.name === -1) {
+      colMap.name = colMap.code === 0 ? 1 : 0;
+    }
+
+    // Iterate Rows and Extract Modules
+    const startRow = headerRowIdx !== -1 ? headerRowIdx + 1 : 0;
+    
+    for (let r = startRow; r < jsonData.length; r++) {
+      const row = jsonData[r];
+      if (!row || row.length === 0) continue;
+      
+      const rowStr = row.map((cell) => cleanText(cell)).join(' | ');
       allText += rowStr + '\n';
+      
+      const lowerRow = rowStr.toLowerCase();
 
-      // Look for module rows in Excel (e.g., "Módulo 1.1", "1.1", "Módulo 1", "BTVDG1.1", etc.)
-      const firstCell = String(row[0] || '').trim();
-      const secondCell = String(row[1] || '').trim();
+      // Check header values
+      if (lowerRow.includes('docente:') || lowerRow.includes('profesor:') || lowerRow.includes('facilitador:')) {
+        const docName = rowStr.split(/docente:|profesor:|facilitador:/i)[1]?.trim();
+        if (docName) {
+          detectedHeader.docente = docName.split('|')[0].trim();
+          detectedFields.push('Docente: ' + detectedHeader.docente);
+        }
+      }
+      if (lowerRow.includes('instituci') || lowerRow.includes('instituto') || lowerRow.includes('colegio') || lowerRow.includes('complejo educativo')) {
+        detectedHeader.institucion = rowStr.split('|')[0].trim();
+        detectedFields.push('Institución');
+      }
+      if (lowerRow.includes('grado:') || lowerRow.includes('secci') || lowerRow.includes('año:')) {
+        detectedHeader.gradoSeccion = rowStr.split('|')[0].trim();
+        detectedFields.push('Grado/Sección');
+      }
+      if (lowerRow.includes('año lectivo:') || lowerRow.includes('año escolar:') || lowerRow.includes('periodo:')) {
+        const yr = rowStr.match(/\b(202\d)\b/);
+        if (yr) {
+          detectedHeader.anoLectivo = yr[1];
+        }
+      }
 
-      const modMatch = firstCell.match(/^([0-9]\.[0-9]|[0-9]+|M[oó]dulo\s*[0-9\.]+|BTV[A-Z0-9\.]+)/i);
-      if (modMatch && secondCell.length > 3 && !firstCell.toLowerCase().includes('código') && !secondCell.toLowerCase().includes('nombre')) {
-        const codigo = firstCell.startsWith('M') || firstCell.startsWith('B') ? firstCell : `Módulo ${firstCell}`;
-        const nombre = secondCell;
-        let horas = 90;
-        let horasSem = 18;
-        
-        // Find numeric hours in row
-        for (let i = 2; i < row.length; i++) {
-          const num = Number(row[i]);
-          if (!isNaN(num) && num >= 18 && num <= 360) {
+      // Check module candidates in row
+      let rawCode = cleanText(row[colMap.code]);
+      let rawName = cleanText(row[colMap.name]);
+      
+      if ((!rawName || rawName.length < 3) && rawCode.includes(':')) {
+        const parts = rawCode.split(':');
+        rawCode = parts[0].trim();
+        rawName = parts.slice(1).join(':').trim();
+      }
+
+      if (rawCode.length > 10 && (!rawName || rawName.length < 3)) {
+        rawName = rawCode;
+        rawCode = `Módulo ${detectedModules.length + 1}`;
+      }
+
+      let horas = 90;
+      if (colMap.hours !== -1 && row[colMap.hours] != null && !isNaN(Number(row[colMap.hours]))) {
+        const h = Number(row[colMap.hours]);
+        if (h >= 10 && h <= 500) horas = h;
+      } else {
+        for (let c = 0; c < row.length; c++) {
+          const num = Number(row[c]);
+          if (!isNaN(num) && num >= 18 && num <= 400 && c !== colMap.code) {
             horas = num;
             break;
           }
         }
+      }
 
-        if (!detectedModules.some(m => m.codigo === codigo)) {
+      let semanas = Math.ceil(horas / 18);
+      if (colMap.weeks !== -1 && row[colMap.weeks] != null && !isNaN(Number(row[colMap.weeks]))) {
+        const w = Number(row[colMap.weeks]);
+        if (w >= 1 && w <= 40) semanas = w;
+      }
+
+      const isHeaderWord = rawCode.toLowerCase().includes('código') || rawCode.toLowerCase().includes('total') || rawCode.toLowerCase().includes('tabla') || rawName.toLowerCase().includes('nombre') || rawName.toLowerCase().includes('descripción') || rawName.toLowerCase().includes('semana') || rawName.toLowerCase().includes('meses');
+      
+      if (rawName && rawName.length >= 3 && !isHeaderWord) {
+        let codigo = rawCode || `Módulo ${detectedModules.length + 1}`;
+        if (!codigo.toLowerCase().startsWith('m') && !codigo.toLowerCase().startsWith('b') && !codigo.toLowerCase().startsWith('mod')) {
+          codigo = `Módulo ${codigo}`;
+        }
+
+        const cleanName = rawName.replace(/^[0-9\.\-\:\s]+/, '').trim() || rawName;
+
+        if (!detectedModules.some((m) => m.codigo.toLowerCase() === codigo.toLowerCase() || m.nombre.toLowerCase() === cleanName.toLowerCase())) {
           detectedModules.push({
             codigo,
-            nombre,
+            nombre: cleanName,
             totalHoras: horas,
-            horasSemanales: horasSem,
-            semanas: Math.ceil(horas / horasSem),
+            horasSemanales: 18,
+            semanas,
             bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
             diaInicio: 19,
             mesInicio: 'enero',
@@ -148,41 +556,32 @@ export async function parseExcelFile(file: File): Promise<ParsedDocumentResult> 
             mesFin: 'febrero',
             fechaInicio: '19 de enero',
             fechaFin: '20 de febrero',
-            unidades: 3,
-            competencias: `Desarrollo de competencias técnicas para ${nombre}`,
+            unidades: colMap.units !== -1 && Number(row[colMap.units]) ? Number(row[colMap.units]) : 3,
+            competencias: colMap.competencies !== -1 && cleanText(row[colMap.competencies]) ? cleanText(row[colMap.competencies]) : `Competencias técnicas y pedagógicas para ${cleanName}`,
             totalIndicadores: 8,
           });
         }
       }
-
-      // Check header values
-      const lowerRow = rowStr.toLowerCase();
-      if (lowerRow.includes('docente:') || lowerRow.includes('profesor:')) {
-        const docName = rowStr.split(/docente:|profesor:/i)[1]?.trim();
-        if (docName) {
-          detectedHeader.docente = docName.split('|')[0].trim();
-          detectedFields.push('Docente');
-        }
-      }
-      if (lowerRow.includes('instituci') || lowerRow.includes('instituto') || lowerRow.includes('colegio')) {
-        detectedHeader.institucion = rowStr.split('|')[0].trim();
-        detectedFields.push('Institución');
-      }
-      if (lowerRow.includes('grado:') || lowerRow.includes('secci')) {
-        detectedHeader.gradoSeccion = rowStr.split('|')[0].trim();
-        detectedFields.push('Grado/Sección');
-      }
-    });
+    }
   });
 
+  const finalMonths = detectedMonths || monthsData2026;
+  const finalPeriods = detectedPeriods || academicPeriods2026;
+
+  // If table extraction found modules, recalculate dates according to official calendar
+  const finalModules = detectedModules.length > 0
+    ? recalculateModuleDatesFromCalendar(detectedModules, finalMonths, finalPeriods)
+    : undefined;
+
   if (detectedModules.length > 0) {
-    detectedFields.push(`${detectedModules.length} Módulos Curriculares`);
+    detectedFields.push(`${detectedModules.length} Módulos Curriculares Reconocidos`);
   }
 
   const summary = {
     modulesCount: detectedModules.length,
     totalHours: detectedModules.reduce((a, b) => a + (b.totalHoras || 0), 0),
-    monthsCount: detectedMonths.length,
+    monthsCount: finalMonths.length,
+    periodsCount: finalPeriods.length,
     detectedFields,
     rawLinesCount: allText.split('\n').length,
   };
@@ -193,10 +592,70 @@ export async function parseExcelFile(file: File): Promise<ParsedDocumentResult> 
     fileSize: file.size,
     rawText: allText,
     headerData: Object.keys(detectedHeader).length > 0 ? detectedHeader : undefined,
-    modules: detectedModules.length > 0 ? detectedModules : undefined,
-    months: detectedMonths.length > 0 ? detectedMonths : undefined,
+    modules: finalModules,
+    months: finalMonths,
+    periods: finalPeriods,
     summary,
   };
+}
+
+/**
+ * Parses a Word (.docx / .doc) document using mammoth and analyzes curricular contents.
+ */
+export async function parseWordFile(file: File): Promise<ParsedDocumentResult> {
+  const arrayBuffer = await file.arrayBuffer();
+  let text = '';
+  try {
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    text = result.value || '';
+  } catch (e) {
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    text = decoder.decode(arrayBuffer);
+  }
+
+  return analyzeExtractedText(file.name, file.size, text, 'word');
+}
+
+/**
+ * Parses a plain text or markdown file (.txt, .md, .csv).
+ */
+export async function parseTextFile(file: File): Promise<ParsedDocumentResult> {
+  const text = await file.text();
+  return analyzeExtractedText(file.name, file.size, text, 'text');
+}
+
+/**
+ * Parses a PDF file using pdfjs-dist in the browser.
+ */
+export async function parsePdfFile(file: File): Promise<ParsedDocumentResult> {
+  let fullText = '';
+  try {
+    const pdfjs = await getPdfJs();
+    const arrayBuffer = await file.arrayBuffer();
+    
+    const loadingTask = pdfjs.getDocument({
+      data: arrayBuffer,
+      useSystemFonts: true,
+      disableFontFace: true,
+    });
+
+    const pdf = await loadingTask.promise;
+    for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      fullText += `\n--- PÁGINA ${i} ---\n` + pageText;
+    }
+  } catch (err: any) {
+    console.warn('PDF parsing fallback:', err);
+    const arrayBuffer = await file.arrayBuffer();
+    const decoder = new TextDecoder('latin1');
+    const raw = decoder.decode(arrayBuffer);
+    const matches = raw.match(/\(([^()]+)\)T[jJ]/g) || [];
+    fullText = matches.map((m: string) => m.replace(/^\(|\)[tT][jJ]$/g, '')).join(' ');
+  }
+
+  return analyzeExtractedText(file.name, file.size, fullText, 'pdf');
 }
 
 /**
@@ -211,10 +670,17 @@ export function parseJsonContent(text: string, fileName = 'documento.json', file
   if (parsed.months && Array.isArray(parsed.months)) detectedFields.push(`${parsed.months.length} Meses y Calendario`);
   if (parsed.periods && Array.isArray(parsed.periods)) detectedFields.push(`${parsed.periods.length} Bimestres y Periodos`);
 
-  const modules = Array.isArray(parsed.modules) ? parsed.modules : undefined;
+  let modules = Array.isArray(parsed.modules) ? parsed.modules : undefined;
   const months = Array.isArray(parsed.months) ? parsed.months : undefined;
   const periods = Array.isArray(parsed.periods) ? parsed.periods : undefined;
   const headerData = parsed.headerData || undefined;
+
+  const finalMonths = months || monthsData2026;
+  const finalPeriods = periods || academicPeriods2026;
+
+  if (modules && modules.length > 0) {
+    modules = recalculateModuleDatesFromCalendar(modules, finalMonths, finalPeriods);
+  }
 
   let detectedGrade: '10' | '11' | '12' | undefined;
   if (headerData?.gradoSeccion) {
@@ -230,8 +696,8 @@ export function parseJsonContent(text: string, fileName = 'documento.json', file
   const summary = {
     modulesCount: modules?.length || 0,
     totalHours: modules?.reduce((acc: number, m: any) => acc + (Number(m.totalHoras) || 0), 0) || 0,
-    monthsCount: months?.length || 0,
-    periodsCount: periods?.length || 0,
+    monthsCount: finalMonths.length,
+    periodsCount: finalPeriods.length,
     detectedFields,
   };
 
@@ -242,105 +708,219 @@ export function parseJsonContent(text: string, fileName = 'documento.json', file
     rawText: text.substring(0, 3000),
     headerData,
     modules,
-    months,
-    periods,
+    months: finalMonths,
+    periods: finalPeriods,
     detectedGrade,
     summary,
   };
 }
 
 /**
- * Heuristics to analyze extracted raw text from PDF or documents.
- * Deeply extracts institutional calendar events, periods, and modules.
+ * High-tolerance NLP / Regex analyzer for arbitrary text, Word, PDF, or pasted clipboard content.
  */
-function analyzeExtractedText(
+export function analyzeExtractedText(
   fileName: string,
   fileSize: number,
   rawText: string,
-  fileType: 'pdf' | 'excel' | 'json'
+  fileType: 'pdf' | 'excel' | 'word' | 'json' | 'text'
 ): ParsedDocumentResult {
   const detectedFields: string[] = [];
   const headerData: Partial<InstitutionalHeader> = {};
   const detectedModules: ModuleDescriptor[] = [];
 
   // 1. Look for Header items
-  const docMatch = rawText.match(/(?:Docente|Profesor|Facilitador)[:\s]+([^\n\r,]+)/i);
+  const docMatch = rawText.match(/(?:Docente|Profesor(?:a)?|Facilitador(?:a)?|Responsable|Elaborado por)[:\s]+([^\n\r,;]{3,50})/i);
   if (docMatch && docMatch[1].trim()) {
-    headerData.docente = docMatch[1].trim();
-    detectedFields.push('Docente: ' + headerData.docente);
+    const doc = docMatch[1].trim();
+    if (doc.length > 3 && !/instituto|módulo|calendario|asamblea|distribuci|periodo|semana/i.test(doc)) {
+      headerData.docente = doc;
+      detectedFields.push('Docente: ' + headerData.docente);
+    }
   }
 
-  const instMatch = rawText.match(/(?:Instituci[oó]n|Centro Educativo|Instituto|Colegio)[:\s]+([^\n\r,]+)/i);
-  if (instMatch && instMatch[1].trim()) {
+  const instMatch = rawText.match(/(?:Instituci[oó]n|Centro Educativo|Instituto(?:\s+Nacional)?|Colegio|Complejo Educativo)[:\s]+([^\n\r,;]{3,60})/i);
+  if (instMatch && instMatch[1].trim() && !/calendario|asamblea|distribuci|periodo|evaluaci/i.test(instMatch[1])) {
     headerData.institucion = instMatch[1].trim();
     detectedFields.push('Institución: ' + headerData.institucion);
-  } else if (rawText.includes('Salesiano') || rawText.includes('San José')) {
+  } else if (rawText.toLowerCase().includes('salesiano') || rawText.toLowerCase().includes('san josé')) {
     headerData.institucion = 'Colegio Salesiano San José - Santa Ana';
     detectedFields.push('Institución: Colegio Salesiano San José');
   }
 
-  const gradeMatch = rawText.match(/(?:Grado|A[ñn]o|Nivel)[:\s]+([^\n\r,]+)/i);
   let detectedGrade: '10' | '11' | '12' | undefined;
-  if (gradeMatch && gradeMatch[1].trim()) {
-    headerData.gradoSeccion = gradeMatch[1].trim();
-    detectedFields.push('Grado: ' + headerData.gradoSeccion);
-    if (headerData.gradoSeccion.includes('1') || headerData.gradoSeccion.includes('Primer') || headerData.gradoSeccion.includes('10')) detectedGrade = '10';
-    if (headerData.gradoSeccion.includes('2') || headerData.gradoSeccion.includes('Segundo') || headerData.gradoSeccion.includes('11')) detectedGrade = '11';
-    if (headerData.gradoSeccion.includes('3') || headerData.gradoSeccion.includes('Tercer') || headerData.gradoSeccion.includes('12')) detectedGrade = '12';
+
+  // Check if text specifically references grade levels
+  if (/\b(?:1°|primer|primero)\s*(?:a[ñn]o|nivel|grado)\b/i.test(rawText)) {
+    detectedGrade = '10';
+  } else if (/\b(?:2°|segundo)\s*(?:a[ñn]o|nivel|grado)\b/i.test(rawText)) {
+    detectedGrade = '11';
+  } else if (/\b(?:3°|tercer|tercero)\s*(?:a[ñn]o|nivel|grado)\b/i.test(rawText)) {
+    detectedGrade = '12';
   }
 
-  const yearMatch = rawText.match(/(?:A[ñn]o Lectivo|Ciclo|Per[ií]odo)[:\s]+(\d{4})/i);
+  const gradeMatch = rawText.match(/(?:Grado(?:\s+y\s+Secci[oó]n)?|Secci[oó]n|A[ñn]o\s+de\s+Bachillerato)[:\s]+([^\n\r,;]{3,40})/i);
+  if (gradeMatch && gradeMatch[1].trim()) {
+    const rawG = gradeMatch[1].trim();
+    if (!/calendario|asamblea|padres|periodo|distribuci|evaluaci|fecha|inicio|cierre|refuerzo|pruebas|salones|media/i.test(rawG)) {
+      headerData.gradoSeccion = rawG;
+      detectedFields.push('Grado: ' + headerData.gradoSeccion);
+      if (headerData.gradoSeccion.includes('1') || headerData.gradoSeccion.includes('Primer') || headerData.gradoSeccion.includes('10')) detectedGrade = '10';
+      if (headerData.gradoSeccion.includes('2') || headerData.gradoSeccion.includes('Segundo') || headerData.gradoSeccion.includes('11')) detectedGrade = '11';
+      if (headerData.gradoSeccion.includes('3') || headerData.gradoSeccion.includes('Tercer') || headerData.gradoSeccion.includes('12')) detectedGrade = '12';
+    }
+  }
+
+  const yearMatch = rawText.match(/(?:A[ñn]o Lectivo|A[ñn]o Escolar|Ciclo|Per[ií]odo|Gesti[oó]n)[:\s]+(\d{4})/i) || rawText.match(/\b(202[4-9])\b/);
   if (yearMatch && yearMatch[1]) {
     headerData.anoLectivo = yearMatch[1];
     detectedFields.push('Año Lectivo: ' + headerData.anoLectivo);
   }
 
-  // 2. Look for module entries in text
-  // Pattern 1: "Módulo 1.1: Nombre del Módulo ... 90 Horas"
-  const moduleRegex = /(?:M[oó]dulo\s*([0-9\.]+)|M([0-9\.]+)|BTV[A-Z0-9\.]+?)[:\s\-]+([A-Za-zÁÉÍÓÚáéíóúñÑ0-9\s,\.\(\)\/\-]+?)(?:(\d{2,3})\s*(?:horas|hrs|h)|(?=\n|M[oó]dulo|$))/gi;
-  let match;
-  
-  while ((match = moduleRegex.exec(rawText)) !== null) {
-    const code = match[1] || match[2] || `M${detectedModules.length + 1}`;
-    const name = match[3]?.trim();
-    const hours = Number(match[4]) || 90;
+  // 2. Scan for Annual Calendar Months (Semanas, Días, Feriados)
+  const detectedMonths = extractMonthsFromFreeText(rawText);
+  if (detectedMonths) {
+    detectedFields.push('12 Meses de Calendario Anual Detectados');
+  }
 
-    if (name && name.length > 4 && !name.toLowerCase().includes('tabla') && !name.toLowerCase().includes('página') && !name.toLowerCase().includes('periodo')) {
-      const cleanName = name.replace(/\s+/g, ' ').substring(0, 100);
-      const codigo = code.startsWith('M') || code.startsWith('B') ? code : `Módulo ${code}`;
-      
-      if (!detectedModules.some((m) => m.codigo === codigo)) {
-        detectedModules.push({
-          codigo,
-          nombre: cleanName,
-          totalHoras: hours >= 18 && hours <= 360 ? hours : 90,
-          horasSemanales: 18,
-          semanas: Math.ceil((hours >= 18 && hours <= 360 ? hours : 90) / 18),
-          bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
-          diaInicio: 19,
-          mesInicio: 'enero',
-          diaFin: 20,
-          mesFin: 'febrero',
-          fechaInicio: '19 de enero',
-          fechaFin: '20 de febrero',
-          unidades: 3,
-          competencias: `Competencias técnicas y saberes para ${cleanName}`,
-          totalIndicadores: 8,
-        });
+  // 3. Scan for Academic Periods (Bimestres / Trimestres)
+  const detectedPeriods = extractAcademicPeriodsFromText(rawText);
+  if (detectedPeriods) {
+    detectedFields.push(`${detectedPeriods.length} Períodos / Bimestres Identificados`);
+  }
+
+  // 4. Pattern Matching for Modules in free text / tables / lists
+  const lines = rawText.split(/\r?\n/);
+  
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length < 5) return;
+
+    // Check for delimiter line: code | name | hours
+    if (trimmed.includes('|') || trimmed.includes('\t') || trimmed.includes(';')) {
+      const parts = trimmed.split(/[|\t;]/).map((p) => p.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const p0 = parts[0];
+        const p1 = parts[1];
+        
+        const isModuleCode = /^(?:M[oó]dulo\s*[0-9\.]+|[0-9]\.[0-9]|[0-9]+|BTV[A-Z0-9\.]+|MOD[0-9\.]+)/i.test(p0);
+        if (isModuleCode && p1.length >= 4 && !p1.toLowerCase().includes('nombre') && !p1.toLowerCase().includes('código') && !p1.toLowerCase().includes('meses')) {
+          let hrs = 90;
+          for (let i = 2; i < parts.length; i++) {
+            const num = parseInt(parts[i].replace(/[^0-9]/g, ''), 10);
+            if (!isNaN(num) && num >= 18 && num <= 400) {
+              hrs = num;
+              break;
+            }
+          }
+
+          const codigo = p0.startsWith('M') || p0.startsWith('B') ? p0 : `Módulo ${p0}`;
+          if (!detectedModules.some((m) => m.codigo.toLowerCase() === codigo.toLowerCase() || m.nombre.toLowerCase() === p1.toLowerCase())) {
+            detectedModules.push({
+              codigo,
+              nombre: p1,
+              totalHoras: hrs,
+              horasSemanales: 18,
+              semanas: Math.ceil(hrs / 18),
+              bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
+              diaInicio: 19,
+              mesInicio: 'enero',
+              diaFin: 20,
+              mesFin: 'febrero',
+              fechaInicio: '19 de enero',
+              fechaFin: '20 de febrero',
+              unidades: 3,
+              competencias: `Competencias para ${p1}`,
+              totalIndicadores: 8,
+            });
+          }
+        }
+      }
+    }
+  });
+
+  // Strategy B: Regex multi-line & descriptor search
+  if (detectedModules.length === 0) {
+    const moduleRegex = /(?:M[oó]dulo\s*([0-9\.]+|[A-Za-z0-9]+)|([0-9]\.[0-9])|BTV[A-Z0-9\.]+?)[:\s\-–\.]+(.+?)(?:(?:\(|\[|\b)(\d{2,3})\s*(?:horas|hrs|h)\b|\n|$)/gi;
+    let match;
+
+    while ((match = moduleRegex.exec(rawText)) !== null) {
+      const rawCode = match[1] || match[2] || `M${detectedModules.length + 1}`;
+      let rawName = match[3]?.trim();
+      const rawHours = match[4] ? parseInt(match[4], 10) : 90;
+
+      if (rawName && rawName.length >= 4 && !rawName.toLowerCase().includes('tabla') && !rawName.toLowerCase().includes('página') && !rawName.toLowerCase().includes('periodo') && !rawName.toLowerCase().includes('evaluación') && !rawName.toLowerCase().includes('enero') && !rawName.toLowerCase().includes('febrero')) {
+        rawName = rawName.replace(/[\(\)\[\]]/g, '').trim();
+        const codigo = rawCode.startsWith('M') || rawCode.startsWith('B') ? rawCode : `Módulo ${rawCode}`;
+        
+        if (!detectedModules.some((m) => m.codigo.toLowerCase() === codigo.toLowerCase() || m.nombre.toLowerCase() === rawName.toLowerCase())) {
+          detectedModules.push({
+            codigo,
+            nombre: rawName.substring(0, 100),
+            totalHoras: rawHours >= 18 && rawHours <= 400 ? rawHours : 90,
+            horasSemanales: 18,
+            semanas: Math.ceil((rawHours >= 18 && rawHours <= 400 ? rawHours : 90) / 18),
+            bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
+            diaInicio: 19,
+            mesInicio: 'enero',
+            diaFin: 20,
+            mesFin: 'febrero',
+            fechaInicio: '19 de enero',
+            fechaFin: '20 de febrero',
+            unidades: 3,
+            competencias: `Competencias técnicas y saberes para ${rawName}`,
+            totalIndicadores: 8,
+          });
+        }
       }
     }
   }
 
+  // Strategy C: Numbered list detection if still empty
+  if (detectedModules.length === 0) {
+    const listRegex = /(?:^|\n)\s*(\d{1,2})\.\s+([A-Za-zÁÉÍÓÚáéíóúñÑ\s\-\,\.\/]{5,100}?)(?:[-–:\s]+(\d{2,3})\s*(?:horas|hrs|h))?(?=\n|$)/g;
+    let listMatch;
+    while ((listMatch = listRegex.exec(rawText)) !== null) {
+      const num = listMatch[1];
+      const name = listMatch[2]?.trim();
+      const hrs = listMatch[3] ? parseInt(listMatch[3], 10) : 90;
+
+      const isExcludedActivity = /actividad|prueba|evaluaci|asamblea|reuni|refuerzo|tbox|diagn[oó]stic|recuperaci|vacacion|asueto|formativa|b[aá]sica|padres|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|bimestre/i.test(name);
+      if (name && name.length > 5 && !isExcludedActivity) {
+        const codigo = `Módulo ${num}`;
+        if (!detectedModules.some((m) => m.nombre.toLowerCase() === name.toLowerCase())) {
+          detectedModules.push({
+            codigo,
+            nombre: name,
+            totalHoras: hrs,
+            horasSemanales: 18,
+            semanas: Math.ceil(hrs / 18),
+            bimestres: { b1: 0, b2: 0, b3: 0, b4: 0 },
+            diaInicio: 19,
+            mesInicio: 'enero',
+            diaFin: 20,
+            mesFin: 'febrero',
+            fechaInicio: '19 de enero',
+            fechaFin: '20 de febrero',
+            unidades: 3,
+            competencias: `Competencias técnicas para ${name}`,
+            totalIndicadores: 8,
+          });
+        }
+      }
+    }
+  }
+
+  const finalMonths = detectedMonths || monthsData2026;
+  const finalPeriods = detectedPeriods || academicPeriods2026;
+
+  // Recalculate full dates & calendar synchronizations
+  const finalModules = detectedModules.length > 0
+    ? recalculateModuleDatesFromCalendar(detectedModules, finalMonths, finalPeriods)
+    : undefined;
+
   if (detectedModules.length > 0) {
-    detectedFields.push(`${detectedModules.length} Módulos Identificados`);
+    detectedFields.push(`${detectedModules.length} Módulos Curriculares Identificados`);
   }
-
-  // 3. Check for Salesiano Calendar presence in text
-  if (rawText.toLowerCase().includes('pausa pedagógica') || rawText.toLowerCase().includes('tbox') || rawText.toLowerCase().includes('don bosco') || rawText.toLowerCase().includes('p.e.r.')) {
-    detectedFields.push('Calendario Oficial CSSJ Identificado');
-  }
-
-  const lines = rawText.split('\n');
 
   return {
     fileName,
@@ -348,15 +928,15 @@ function analyzeExtractedText(
     fileSize,
     rawText,
     headerData: Object.keys(headerData).length > 0 ? headerData : undefined,
-    modules: detectedModules.length > 0 ? detectedModules : undefined,
-    months: monthsData2026,
-    periods: academicPeriods2026,
+    modules: finalModules,
+    months: finalMonths,
+    periods: finalPeriods,
     detectedGrade,
     summary: {
       modulesCount: detectedModules.length,
       totalHours: detectedModules.reduce((a, b) => a + (b.totalHoras || 0), 0),
-      monthsCount: monthsData2026.length,
-      periodsCount: academicPeriods2026.length,
+      monthsCount: finalMonths.length,
+      periodsCount: finalPeriods.length,
       detectedFields,
       rawLinesCount: lines.length,
     },
@@ -422,8 +1002,30 @@ export function recalculateModuleDatesFromCalendar(
     const startInfo = estimateMonthDay(startWeek);
     const endInfo = estimateMonthDay(endWeek);
 
+    const totalH = mod.totalHoras || (modWeeks * hrsPerWeek);
+    const durH = mod.duracionHoras || totalH;
+    const tec = mod.desarrolloTecnico ?? 2;
+    const emp = mod.desarrolloEmprendedor ?? 2;
+    const hum = mod.desarrolloHumanoSocial ?? 2;
+    const acad = mod.desarrolloAcademicoAplicado ?? 2;
+    const totInd = mod.totalIndicadores ?? (tec + emp + hum + acad);
+
     return {
       ...mod,
+      totalHoras: totalH,
+      duracionHoras: durH,
+      horasSemanales: hrsPerWeek,
+      desarrolloTecnico: tec,
+      desarrolloEmprendedor: emp,
+      desarrolloHumanoSocial: hum,
+      desarrolloAcademicoAplicado: acad,
+      totalIndicadores: totInd,
+      horasPorUnidad: {
+        u1: mod.horasPorUnidad?.u1 ?? durH,
+        u2: mod.horasPorUnidad?.u2 || 0,
+        u3: mod.horasPorUnidad?.u3 || 0,
+        u4: mod.horasPorUnidad?.u4 || 0,
+      },
       semanas: modWeeks,
       bimestres: { b1, b2, b3, b4 },
       diaInicio: startInfo.dia,
@@ -448,46 +1050,71 @@ export function generateExcelTemplateWorkbook(
 
   // Hoja 1: Periodos y Evaluaciones (Bimestres con TBox y fechas oficiales)
   const periodRows: any[] = [];
+  periodRows.push([
+    'Bimestre / Periodo',
+    'Fecha Inicio',
+    'Fecha Fin',
+    'Semanas',
+    'Subida Notas TBox',
+    'Entrega de Boletas',
+    'Eventos y Actividades Clave',
+  ]);
+
   academicPeriods2026.forEach((p) => {
-    p.actividades.forEach((act) => {
-      periodRows.push({
-        'Periodo / Bimestre': p.nombre,
-        'Rango del Periodo': `${p.inicio} al ${p.fin}`,
-        'Actividad Evaluativa / Evento': act.nombre,
-        'Porcentaje': act.porcentaje || 'Formativo',
-        'Fechas de Aplicación': act.fechas || `${act.fechaInicio} al ${act.fechaCierre}`,
-        'Límite Ingreso TBox': act.ingresoTBox || '------------',
-        'Entrega de Boletas': p.entregaBoletas || '------------',
-      });
-    });
+    periodRows.push([
+      p.nombre,
+      p.inicio,
+      p.fin,
+      p.ingresoTBoxFinal || 'Conforme a calendario',
+      p.entregaBoletas || 'Por definir',
+      p.actividades.map((a) => `${a.nombre} (${a.fechas || a.fechaInicio || ''})`).join('; '),
+    ]);
   });
-  const wsPeriods = XLSX.utils.json_to_sheet(periodRows);
-  XLSX.utils.book_append_sheet(wb, wsPeriods, 'Periodos_Evaluaciones');
 
-  // Hoja 2: Calendario Mes a Mes con Conteo Exacto de Semanas y Días
-  const monthRows = months.map((m) => ({
-    'Mes': m.name,
-    'Semanas Laborales': m.semanas,
-    'Días Hábiles Lectivos': m.dias,
-    'Pausas, Descansos y Feriados': m.feriadosDesc,
-  }));
-  const wsMonths = XLSX.utils.json_to_sheet(monthRows);
-  XLSX.utils.book_append_sheet(wb, wsMonths, 'Calendario_Meses_y_Dias');
+  const wsPeriods = XLSX.utils.aoa_to_sheet(periodRows);
+  XLSX.utils.book_append_sheet(wb, wsPeriods, 'Periodos_Evaluaciones_2026');
 
-  // Hoja 3: Módulos Curriculares y Carga Horaria
-  const modRows = modules.map((m) => ({
-    'Código Módulo': m.codigo,
-    'Nombre del Módulo Curricular': m.nombre,
-    'Horas Totales': m.totalHoras,
-    'Horas Semanales': m.horasSemanales,
-    'Semanas Duración': m.semanas,
-    'Fecha Inicio': m.fechaInicio,
-    'Fecha Fin': m.fechaFin,
-    'Competencias Técnicas': m.competencias,
-    'Total Indicadores': m.totalIndicadores,
-  }));
-  const wsMod = XLSX.utils.json_to_sheet(modRows);
-  XLSX.utils.book_append_sheet(wb, wsMod, 'Modulos_Curriculares');
+  // Hoja 2: Calendario y Días Hábiles (Mes por mes)
+  const calendarRows: any[] = [];
+  calendarRows.push(['Mes', 'Semanas Hábiles', 'Días Hábiles', 'Feriados y Descansos Institucionales']);
+
+  months.forEach((m) => {
+    calendarRows.push([m.name, m.semanas, m.dias, m.feriadosDesc || 'Días hábiles regulares']);
+  });
+
+  const wsCalendar = XLSX.utils.aoa_to_sheet(calendarRows);
+  XLSX.utils.book_append_sheet(wb, wsCalendar, 'Calendario_Dias_Habiles');
+
+  // Hoja 3: Módulos Curriculares y Distribución Horaria
+  const modRows: any[] = [];
+  modRows.push([
+    'Código del Módulo',
+    'Nombre del Módulo',
+    'Total Horas',
+    'Horas Semanales',
+    'Semanas',
+    'Unidades',
+    'Fecha Inicio (Calculada)',
+    'Fecha Fin (Calculada)',
+    'Competencias Técnicas y Saberes',
+  ]);
+
+  modules.forEach((m) => {
+    modRows.push([
+      m.codigo,
+      m.nombre,
+      m.totalHoras,
+      m.horasSemanales,
+      m.semanas,
+      m.unidades || 3,
+      m.fechaInicio,
+      m.fechaFin,
+      m.competencias || '',
+    ]);
+  });
+
+  const wsModules = XLSX.utils.aoa_to_sheet(modRows);
+  XLSX.utils.book_append_sheet(wb, wsModules, 'Modulos_Curriculares');
 
   return wb;
 }
